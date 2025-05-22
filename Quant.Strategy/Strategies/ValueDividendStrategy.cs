@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using DataEventDriven;
+using GMSDK;
 using Microsoft.Extensions.Logging;
 using Quant.Strategy.Models;
 using Quant.Strategy.Services;
@@ -29,7 +31,7 @@ namespace Quant.Strategy.Strategies
     /// 2. 对于历史持有过的股票，如果当前价格低于上次交易价格的50%则购买
     /// 3. 收盘时购买1日期国债逆回购
     /// </summary>
-    public class ValueDividendStrategy : IStrategy
+    public class ValueDividendStrategy : MyStrategy
     {
         private readonly IStockDataService _stockDataService;
         private readonly IPositionService _positionService;
@@ -58,22 +60,15 @@ namespace Quant.Strategy.Strategies
         private readonly Dictionary<string, DateTime> _lastTradeTime = new Dictionary<string, DateTime>();
         private readonly Dictionary<string, int> _tradeBatchCount = new Dictionary<string, int>();
 
-        public ValueDividendStrategy(
-            IStockDataService stockDataService,
-            IPositionService positionService,
-            IIndustryDataService industryDataService,
-            ITradeCostService tradeCostService,
-            ITradeHistoryService tradeHistoryService,
-            IRepoService repoService,
-            ILogger<ValueDividendStrategy> logger)
+        public ValueDividendStrategy(string token, string strategyId, StrategyMode mode):base(token,strategyId,mode)
         {
-            _stockDataService = stockDataService;
-            _positionService = positionService;
-            _industryDataService = industryDataService;
-            _tradeCostService = tradeCostService;
-            _tradeHistoryService = tradeHistoryService;
-            _repoService = repoService;
-            _logger = logger;
+            //_stockDataService = stockDataService;
+            //_positionService = positionService;
+            //_industryDataService = industryDataService;
+            //_tradeCostService = tradeCostService;
+            //_tradeHistoryService = tradeHistoryService;
+            //_repoService = repoService;
+            //_logger = logger;
         }
 
         private async Task<bool> CanTrade(string stockCode)
@@ -337,7 +332,7 @@ namespace Quant.Strategy.Strategies
             }
         }
 
-        public async Task Execute()
+        public override void OnInit()
         {
             try
             {

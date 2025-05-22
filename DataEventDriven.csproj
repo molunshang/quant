@@ -1,0 +1,148 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{D73E2E31-61F4-4891-B46D-5CF3CE697DAF}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>DataEventDriven</RootNamespace>
+    <AssemblyName>DataEventDriven</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <PublishUrl>publish\</PublishUrl>
+    <Install>true</Install>
+    <InstallFrom>Disk</InstallFrom>
+    <UpdateEnabled>false</UpdateEnabled>
+    <UpdateMode>Foreground</UpdateMode>
+    <UpdateInterval>7</UpdateInterval>
+    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
+    <UpdatePeriodically>false</UpdatePeriodically>
+    <UpdateRequired>false</UpdateRequired>
+    <MapFileExtensions>true</MapFileExtensions>
+    <ApplicationRevision>0</ApplicationRevision>
+    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
+    <UseApplicationTrust>false</UseApplicationTrust>
+    <BootstrapperEnabled>true</BootstrapperEnabled>
+    <TargetFrameworkProfile />
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>x86</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <DocumentationFile>
+    </DocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x86'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>bin\x86\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x86</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x86'">
+    <OutputPath>bin\x86\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x86</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Quant.Strategy\Models\IStrategy.cs" />
+    <Compile Include="Quant.Strategy\Models\StockModels.cs" />
+    <Compile Include="Quant.Strategy\Services\IIndustryDataService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQIndustryDataService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQPerformanceMonitorService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQPositionService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQRealTimeMonitorService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQRepoService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQRiskControlService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQStockDataService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQTradeAnalysisService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQTradeCostOptimizationService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQTradeCostService.cs" />
+    <Compile Include="Quant.Strategy\Services\Impl\JQTradeHistoryService.cs" />
+    <Compile Include="Quant.Strategy\Services\IPerformanceMonitorService.cs" />
+    <Compile Include="Quant.Strategy\Services\IPositionService.cs" />
+    <Compile Include="Quant.Strategy\Services\IRealTimeMonitorService.cs" />
+    <Compile Include="Quant.Strategy\Services\IRepoService.cs" />
+    <Compile Include="Quant.Strategy\Services\IRiskControlService.cs" />
+    <Compile Include="Quant.Strategy\Services\IStockDataService.cs" />
+    <Compile Include="Quant.Strategy\Services\ITradeAnalysisService.cs" />
+    <Compile Include="Quant.Strategy\Services\ITradeCostOptimizationService.cs" />
+    <Compile Include="Quant.Strategy\Services\ITradeCostService.cs" />
+    <Compile Include="Quant.Strategy\Services\ITradeHistoryService.cs" />
+    <Compile Include="Quant.Strategy\Strategies\ValueDividendStrategy.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <BootstrapperPackage Include=".NETFramework,Version=v4.5.2">
+      <Visible>False</Visible>
+      <ProductName>Microsoft .NET Framework 4.5.2 %28x86 和 x64%29</ProductName>
+      <Install>true</Install>
+    </BootstrapperPackage>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.5 SP1</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="gmsdk-net-x86">
+      <Version>3.3.8</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
+      <Version>9.0.5</Version>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json">
+      <Version>8.0.3</Version>
+    </PackageReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <PropertyGroup>
+    <PreBuildEvent>
+    </PreBuildEvent>
+  </PropertyGroup>
+  <PropertyGroup>
+    <PostBuildEvent>
+    </PostBuildEvent>
+  </PropertyGroup>
+</Project>
