@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Quant.Strategy.Models;
+using DataEventDriven.Models;
 
 namespace Quant.Strategy.Services
 {

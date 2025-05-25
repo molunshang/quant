@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Quant.Strategy.Services;
 
-namespace Quant.Strategy.Services.Impl
+namespace DataEventDriven.Services.Impl
 {
     /// <summary>
     /// 掘金量化性能监控服务实现
@@ -240,4 +240,4 @@ namespace Quant.Strategy.Services.Impl
             return Task.FromResult(0.0);
         }
     }
-} 
+}

@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using DataEventDriven.Models;
 using Microsoft.Extensions.Logging;
-using Quant.Strategy.Models;
 using Quant.Strategy.Services;
 
 namespace Quant.Strategy.Services.Impl
