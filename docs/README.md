@@ -33,3 +33,11 @@
 - [通用数据函数（免费）](API介绍/通用数据函数（免费）.md)
 - [老版本数据函数](API介绍/老版本数据函数.md)
 - [其他函数](API介绍/其他函数.md)
+
+
+## 更新文档
+
+```bash
+pip install html2text
+python3 download_sdk_docs.py
+```
