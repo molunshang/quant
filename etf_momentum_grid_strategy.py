@@ -1,14 +1,18 @@
 # coding=utf-8
 """
-ETF 双动量 + 动态网格交易策略
+ETF 双动量 + 动态网格交易策略（集成 ETF 筛选管道）
 
 基于掘金量化 Python SDK 实现：
 - 在 ETF 池中通过双动量（绝对动量 + 相对动量）选择最优标的
 - 状态机管理：CASH（空仓持货基）和 TREND（趋势持股）
 - 趋势持股期间通过网格交易低吸高抛增减仓位
 - 闲置资金自动配置货币基金
+- ★ 集成 EtfFilterPipeline：每日盘前自动扫描全市场 ETF，
+  执行规模/流动性/折溢价/大类去重四层筛选，动态更新种子池
 
-参考文档: docs/strategies/etfMomentumGridStrategy.md
+参考文档:
+  docs/strategies/etfMomentumGridStrategy.md
+  docs/strategies/etfFilterPipeline.md
 """
 
 from __future__ import print_function, absolute_import
@@ -16,22 +20,34 @@ from gm.api import *
 import numpy as np
 import pandas as pd
 
+# 筛选管道
+from etf_filter_pipeline import (
+    EtfFilterPipeline,
+    gm_fetch_all_etf_symbols,
+    gm_fetch_daily_amounts,
+    gm_get_etf_seed_pool,
+)
+
 
 # ============================================================
-# 策略参数配置（可修改）
+# 策略参数配置
 # ============================================================
 
-# ETF 标的池：主要宽基指数和行业 ETF
-ETF_POOL = [
+# ── 回退 ETF 池（当全市场筛选不可用时使用） ──
+#      覆盖各大类资产，确保动量轮动有足够的低相关标的
+FALLBACK_ETF_POOL = [
+    # A股大盘
     'SHSE.510300',   # 沪深300ETF
     'SHSE.510050',   # 上证50ETF
+    # A股中小盘
     'SHSE.510500',   # 中证500ETF
-    'SZSE.159915',   # 创业板ETF
-    'SZSE.159919',   # 沪深300ETF(深)
-    'SHSE.512880',   # 证券ETF
     'SHSE.512100',   # 中证1000ETF
-    'SZSE.159845',   # 中证1000ETF(深)
+    'SZSE.159915',   # 创业板ETF
     'SHSE.588000',   # 科创50ETF
+    # 红利防御
+    'SHSE.512890',   # 红利低波ETF
+    # 跨境对冲
+    'SHSE.513100',   # 纳指100ETF
 ]
 
 # 货币基金（闲置资金去处）
@@ -45,15 +61,22 @@ INITIAL_POSITION_RATIO = 0.60  # 首次建仓比例（60%）
 MIN_POSITION_RATIO = 0.30    # 网格减仓下限（30%）
 GRID_TRADE_RATIO = 0.10      # 每次网格交易比例（10%）
 
-# 执行时间
-MOMENTUM_CHECK_TIME = '09:35:00'   # 每日动量检查和交易时间
-GRID_CHECK_FREQUENCY = '300s'      # 日内网格检查频率（5分钟）
+# 定时任务时间
+MOMENTUM_CHECK_TIME = '09:35:00'     # 每日动量检查和交易时间
+POOL_REFRESH_TIME = '09:31:00'       # ETF 池刷新时间（盘前）
+POOL_REFRESH_DATE_RULE = '1w'        # ETF 池刷新频率：每周一次
 
+# 日内网格
+GRID_CHECK_FREQUENCY = '300s'        # 日内网格检查频率（5分钟）
+
+
+# ============================================================
+# 策略入口
+# ============================================================
 
 def init(context):
     """策略初始化"""
     # 1. 存储策略参数
-    context.etf_pool = ETF_POOL
     context.money_fund = MONEY_FUND
     context.total_capital = TOTAL_CAPITAL
     context.lookback = LOOKBACK
@@ -67,35 +90,82 @@ def init(context):
     context.current_asset = None        # 当前持仓的 ETF symbol
     context.base_price = 0.0            # 网格锚定中轴价
 
-    # 3. 记录日志用的辅助变量
+    # 3. 计数器
     context.change_count = 0            # 换仓次数
     context.grid_trade_count = 0        # 网格交易次数
+    context.pool_refresh_count = 0      # 池刷新次数
 
-    # 4. 订阅行情数据
-    #    ETF 池日线：用于动量计算
-    subscribe_etf_str = ','.join(context.etf_pool)
-    subscribe(symbols=subscribe_etf_str, frequency='1d', count=LOOKBACK + 10, format='df')
-    #    ETF 池分钟线：用于日内网格监控
-    subscribe(symbols=subscribe_etf_str, frequency=GRID_CHECK_FREQUENCY, count=10, format='df')
-    #    货币基金日线
-    subscribe(symbols=context.money_fund, frequency='1d', count=10, format='df')
+    # 4. ★ 初始化 ETF 种子池（动态筛选 + 回退兜底）
+    context.etf_pool = _initialize_etf_pool(context)
+    log(level='info', msg='初始 ETF 池 ({} 只): {}'.format(
+        len(context.etf_pool), context.etf_pool), source='strategy')
 
-    # 5. 设置定时任务：每日盘后动量检查
-    schedule(schedule_func=algo_momentum_check, date_rule='1d', time_rule=MOMENTUM_CHECK_TIME)
+    # 5. 订阅行情数据
+    _subscribe_pool(context)
 
-    log(level='info', msg='ETF 动量网格策略初始化完成，ETF池: {}'.format(context.etf_pool), source='strategy')
-    log(level='info', msg='货币基金: {}, 总资金: {}'.format(context.money_fund, context.total_capital), source='strategy')
+    # 6. 设置定时任务
+    #    每周刷新 ETF 池
+    schedule(schedule_func=algo_refresh_etf_pool,
+             date_rule=POOL_REFRESH_DATE_RULE, time_rule=POOL_REFRESH_TIME)
+    #    每日动量检查 + 交易
+    schedule(schedule_func=algo_momentum_check,
+             date_rule='1d', time_rule=MOMENTUM_CHECK_TIME)
+
+    log(level='info', msg='ETF 动量网格策略初始化完成', source='strategy')
+    log(level='info', msg='货币基金: {}  总资金: {:,.0f}'.format(
+        context.money_fund, context.total_capital), source='strategy')
+
+
+# ============================================================
+# 定时任务
+# ============================================================
+
+def algo_refresh_etf_pool(context):
+    """
+    定期刷新 ETF 种子池。
+
+    每周执行一次，从全市场重新筛选健康 ETF。
+    如果池发生变化，自动重新订阅行情。
+    """
+    log(level='info', msg='--- ETF 池刷新 ---', source='strategy')
+    context.pool_refresh_count += 1
+
+    try:
+        new_pool = _initialize_etf_pool(context)
+    except Exception as e:
+        log(level='error', msg='ETF 池刷新异常: {}，保留现有池'.format(e), source='strategy')
+        return
+
+    if not new_pool:
+        log(level='warning', msg='刷新结果为空，保留现有池', source='strategy')
+        return
+
+    old_pool = set(context.etf_pool)
+    new_pool_set = set(new_pool)
+
+    added = new_pool_set - old_pool
+    removed = old_pool - new_pool_set
+
+    if added or removed:
+        log(level='info', msg='ETF 池变更: +{} -{}'.format(
+            list(added), list(removed)), source='strategy')
+        context.etf_pool = new_pool
+        # 重新订阅新池
+        _subscribe_pool(context)
+    else:
+        log(level='info', msg='ETF 池未变化，保持现有订阅', source='strategy')
 
 
 def algo_momentum_check(context):
     """
-    每日动量检查 + 交易信号生成任务：
+    每日动量检查 + 交易信号生成：
     1. 计算 ETF 池中各标的的双动量
     2. 选择最优标的
     3. 状态机切换 / 维持
     4. 生成目标仓位并执行交易
     """
-    log(level='info', msg='--- 每日动量检查 ---', source='strategy')
+    log(level='info', msg='--- 每日动量检查 (池: {} 只) ---'.format(
+        len(context.etf_pool)), source='strategy')
 
     # 1. 计算各 ETF 的动量值
     momentum_scores = _calculate_momentum(context)
@@ -111,51 +181,108 @@ def algo_momentum_check(context):
     _execute_state_machine(context, momentum_scores, current_positions)
 
 
+# ============================================================
+# 事件回调
+# ============================================================
+
 def on_bar(context, bars):
     """
-    分钟 bar 事件回调：用于日内网格交易监控
+    分钟 bar 事件回调：日内网格交易监控
     """
     if context.current_regime != 'TREND' or context.current_asset is None:
         return
 
-    # 获取当前持仓 ETF 的最新价格
     symbol = bars[0]['symbol'] if isinstance(bars, list) else bars['symbol']
 
-    # 只处理当前持有的 ETF
     if symbol != context.current_asset:
         return
 
-    # 检查是否需要网格交易
     _grid_trading_check(context, symbol)
 
 
 def on_backtest_finished(context, indicator):
     """回测结束，输出绩效摘要"""
     print(indicator)
-    print('换仓次数: {}, 网格交易次数: {}'.format(
-        context.change_count, context.grid_trade_count))
+    print('换仓次数: {}, 网格交易次数: {}, 池刷新次数: {}'.format(
+        context.change_count, context.grid_trade_count, context.pool_refresh_count))
 
 
 # ============================================================
-# 核心逻辑函数
+# ETF 池管理
+# ============================================================
+
+def _initialize_etf_pool(context):
+    """
+    获取当前健康的 ETF 种子池。
+
+    优先使用全市场动态筛选，失败时回退到预设池。
+    """
+    try:
+        end_time = context.now.strftime('%Y-%m-%d %H:%M:%S')
+        is_live = (context.mode == MODE_LIVE)
+
+        pool = gm_get_etf_seed_pool(
+            end_time=end_time,
+            context=context,
+            check_premium=is_live,
+        )
+        if pool:
+            return pool
+    except Exception as e:
+        log(level='warning', msg='全市场 ETF 筛选失败: {}'.format(e), source='strategy')
+
+    log(level='info', msg='使用回退 ETF 池: {}'.format(FALLBACK_ETF_POOL), source='strategy')
+    return list(FALLBACK_ETF_POOL)
+
+
+def _subscribe_pool(context):
+    """
+    订阅当前 ETF 池 + 货币基金的行情数据。
+
+    使用 unsubscribe_previous=True 清理旧订阅。
+    """
+    pool = list(context.etf_pool)
+    if not pool:
+        log(level='error', msg='ETF 池为空，无法订阅', source='strategy')
+        return
+
+    # ETF 池日线：用于动量计算
+    subscribe_str = ','.join(pool)
+    subscribe(symbols=subscribe_str, frequency='1d',
+              count=LOOKBACK + 10, format='df',
+              unsubscribe_previous=True)
+
+    # ETF 池分钟线：用于日内网格监控
+    subscribe(symbols=subscribe_str, frequency=GRID_CHECK_FREQUENCY,
+              count=10, format='df')
+
+    # 货币基金日线
+    subscribe(symbols=context.money_fund, frequency='1d',
+              count=10, format='df')
+
+    log(level='info', msg='已订阅 {} 只 ETF + 货基'.format(len(pool)),
+        source='strategy')
+
+
+# ============================================================
+# 动量计算
 # ============================================================
 
 def _calculate_momentum(context):
     """
-    计算 ETF 池中每个标的的双动量
+    计算 ETF 池中每个标的的双动量。
 
     - 绝对动量：当前价格是否在 MA(lookback) 之上（必要条件）
     - 相对动量：过去 lookback 日的收益率（排名依据）
 
-    返回: {etf_symbol: momentum_return_rate}，仅包含满足绝对动量的标的
+    返回: {etf_symbol: return_rate}，仅包含满足绝对动量的标的
     """
-    end_time = context.now.strftime('%Y-%m-%d %H:%M:%S')
     valid_momentum = {}
 
     for etf in context.etf_pool:
         try:
-            # 从 context.data 获取日线数据
-            data = context.data(symbol=etf, frequency='1d', count=context.lookback + 1)
+            data = context.data(symbol=etf, frequency='1d',
+                                count=context.lookback + 1)
             if data is None or data.empty or len(data) < context.lookback:
                 continue
 
@@ -165,16 +292,21 @@ def _calculate_momentum(context):
 
             # 绝对动量：价格必须在均线之上
             if current_price > ma_price:
-                # 相对动量：过去 lookback 日的收益率
-                return_rate = (current_price - prices[-context.lookback]) / prices[-context.lookback]
+                return_rate = ((current_price - prices[-context.lookback])
+                               / prices[-context.lookback])
                 valid_momentum[etf] = return_rate
 
         except Exception as e:
-            log(level='warning', msg='计算 {} 动量异常: {}'.format(etf, e), source='strategy')
+            log(level='warning', msg='计算 {} 动量异常: {}'.format(etf, e),
+                source='strategy')
             continue
 
     return valid_momentum
 
+
+# ============================================================
+# 持仓与交易
+# ============================================================
 
 def _parse_current_positions(positions):
     """解析当前持仓，返回 {symbol: 持仓金额}"""
@@ -188,63 +320,53 @@ def _parse_current_positions(positions):
         if vol <= 0:
             continue
 
-        # 获取当前价格估算持仓金额
         price_info = current_price(symbols=symbol)
         if price_info:
-            current_price_val = price_info[0].get('price', 0)
+            p = price_info[0].get('price', 0)
         else:
-            current_price_val = 0
+            p = 0
 
-        if current_price_val > 0:
-            holding_dict[symbol] = vol * current_price_val
+        if p > 0:
+            holding_dict[symbol] = vol * p
 
     return holding_dict
 
 
 def _execute_state_machine(context, momentum_scores, current_positions):
     """
-    状态机执行逻辑
+    状态机: CASH ←→ TREND
 
-    状态: CASH（空仓/货基）  TREND（趋势持股）
-
-    状态转换规则：
     - CASH → TREND: 出现满足绝对动量的标的（首次建仓）
     - TREND → CASH: 所有 ETF 都不满足绝对动量（全部跌破均线）
-    - TREND → TREND:
-        - 当前标的仍在均线上方且动量最高 → 维持，执行网格
-        - 换仓（动量第一名切换）→ 卖出旧标的，买入新标的
+    - TREND → TREND: 维持当前标的或切换到动量第一名
     """
-    target_portfolio = {}  # {symbol: 目标金额}
+    target_portfolio = {}
 
-    # ---- 情况 1: 全场无满足绝对动量的标的 → 空仓 ----
+    # ---- 全场空仓 ----
     if not momentum_scores:
         if context.current_regime == 'TREND':
-            log(level='info', msg='【交易信号：全场空仓】所有ETF跌破均线，转入货基', source='strategy')
+            log(level='info', msg='【交易信号：全场空仓】所有ETF跌破均线，转入货基',
+                source='strategy')
             context.current_regime = 'CASH'
             context.current_asset = None
             context.base_price = 0.0
 
-            # 清仓所有持仓 ETF
-            for symbol, val in current_positions.items():
+            for symbol in current_positions:
                 if symbol != context.money_fund:
                     order_target_value(
-                        symbol=symbol,
-                        value=0,
+                        symbol=symbol, value=0,
                         position_side=PositionSide_Long,
-                        order_type=OrderType_Market,
-                        price=0
+                        order_type=OrderType_Market, price=0,
                     )
 
-        # 全部资金归入货币基金
         target_portfolio[context.money_fund] = context.total_capital
         _execute_trades(context, target_portfolio, current_positions)
         return
 
-    # ---- 情况 2: 选出动量最强的 ETF ----
+    # ---- 选出动量最强的 ETF ----
     best_etf = max(momentum_scores, key=momentum_scores.get)
     best_momentum = momentum_scores[best_etf]
 
-    # 获取当前最佳 ETF 的最新价格
     price_info = current_price(symbols=best_etf)
     if not price_info:
         return
@@ -252,67 +374,62 @@ def _execute_state_machine(context, momentum_scores, current_positions):
     if current_etf_price <= 0:
         return
 
-    # ---- 情况 2a: 新开仓或换仓 ----
+    # ---- 新开仓或换仓 ----
     if context.current_asset != best_etf:
         if context.current_asset is None:
-            log(level='info', msg='【交易信号：新开仓】选中 {}, 动量 {:.2%}, 建仓 {}%'.format(
-                best_etf, best_momentum, INITIAL_POSITION_RATIO * 100), source='strategy')
+            log(level='info', msg='【交易信号：新开仓】选中 {}，动量 {:.2%}，建仓 {}%'.format(
+                best_etf, best_momentum, INITIAL_POSITION_RATIO * 100),
+                source='strategy')
         else:
-            log(level='info', msg='【交易信号：换仓】从 {} 切换到 {}, 新动量 {:.2%}'.format(
-                context.current_asset, best_etf, best_momentum), source='strategy')
+            log(level='info', msg='【交易信号：换仓】{} → {}，新动量 {:.2%}'.format(
+                context.current_asset, best_etf, best_momentum),
+                source='strategy')
             context.change_count += 1
 
-        # 更新状态机
         context.current_regime = 'TREND'
         context.current_asset = best_etf
         context.base_price = current_etf_price
 
         # 清仓旧标的
-        if context.current_asset != best_etf:
-            for symbol in current_positions:
-                if symbol != context.money_fund and symbol != best_etf:
-                    order_target_value(
-                        symbol=symbol,
-                        value=0,
-                        position_side=PositionSide_Long,
-                        order_type=OrderType_Market,
-                        price=0
-                    )
+        for symbol in current_positions:
+            if symbol != context.money_fund and symbol != best_etf:
+                order_target_value(
+                    symbol=symbol, value=0,
+                    position_side=PositionSide_Long,
+                    order_type=OrderType_Market, price=0,
+                )
 
-        # 建立新仓：60% 资金买入，40% 预留给网格
+        # 建立新仓
         target_portfolio[best_etf] = context.total_capital * INITIAL_POSITION_RATIO
 
-    # ---- 情况 2b: 维持当前标的，执行网格 ----
+    # ---- 维持当前标的，执行网格 ----
     else:
         price_change = (current_etf_price - context.base_price) / context.base_price
         current_holding_val = current_positions.get(best_etf, 0)
 
         if price_change <= -GRID_STEP:
-            # 价格下跌超过 2%：低吸加仓
             new_target_val = min(
                 context.total_capital,
-                current_holding_val + context.total_capital * GRID_TRADE_RATIO
+                current_holding_val + context.total_capital * GRID_TRADE_RATIO,
             )
             target_portfolio[best_etf] = new_target_val
-            context.base_price = current_etf_price  # 更新网格中轴
+            context.base_price = current_etf_price
             context.grid_trade_count += 1
-            log(level='info', msg='【网格低吸】{} 下跌 {:.2%}，加仓至 {:.0f}'.format(
+            log(level='info', msg='【网格低吸】{} 下跌 {:.2%}，加仓至 {:,.0f}'.format(
                 best_etf, price_change, new_target_val), source='strategy')
 
         elif price_change >= GRID_STEP:
-            # 价格上涨超过 2%：高抛减仓
             new_target_val = max(
                 context.total_capital * MIN_POSITION_RATIO,
-                current_holding_val - context.total_capital * GRID_TRADE_RATIO
+                current_holding_val - context.total_capital * GRID_TRADE_RATIO,
             )
             target_portfolio[best_etf] = new_target_val
-            context.base_price = current_etf_price  # 更新网格中轴
+            context.base_price = current_etf_price
             context.grid_trade_count += 1
-            log(level='info', msg='【网格高抛】{} 上涨 {:.2%}，减仓至 {:.0f}'.format(
+            log(level='info', msg='【网格高抛】{} 上涨 {:.2%}，减仓至 {:,.0f}'.format(
                 best_etf, price_change, new_target_val), source='strategy')
 
         else:
-            # 价格在网格区间内：维持现有仓位
             target_portfolio[best_etf] = current_holding_val
 
     # 剩余资金归入货币基金
@@ -320,18 +437,17 @@ def _execute_state_machine(context, momentum_scores, current_positions):
     if allocated_val < context.total_capital:
         target_portfolio[context.money_fund] = context.total_capital - allocated_val
 
-    # 执行交易
     _execute_trades(context, target_portfolio, current_positions)
 
 
 def _grid_trading_check(context, symbol):
     """
-    日内分钟级别网格检查（实盘/仿真模式适用）
+    日内分钟级网格检查（实盘/仿真适用）。
 
-    在 on_bar 回调中触发，用于更高频率的网格交易检查
+    在 on_bar 回调中触发，用于更高频的网格交易。
     """
-    # 获取分钟 bar 数据
-    bar_data = context.data(symbol=symbol, frequency=GRID_CHECK_FREQUENCY, count=5)
+    bar_data = context.data(symbol=symbol, frequency=GRID_CHECK_FREQUENCY,
+                            count=5)
     if bar_data is None or bar_data.empty:
         return
 
@@ -341,7 +457,6 @@ def _grid_trading_check(context, symbol):
 
     price_change = (current_price - context.base_price) / context.base_price
 
-    # 获取当前该标的的持仓金额
     positions = context.account().positions()
     current_holding_val = 0
     for pos in positions:
@@ -352,75 +467,59 @@ def _grid_trading_check(context, symbol):
             break
 
     if abs(price_change) >= GRID_STEP:
-        # 价格突破网格线，触发交易
-        # 注意：此处去重逻辑确保不会在同一网格区间内重复交易
-        # 通过 base_price 的更新来实现
         if price_change <= -GRID_STEP:
             new_target_val = min(
                 context.total_capital,
-                current_holding_val + context.total_capital * GRID_TRADE_RATIO
+                current_holding_val + context.total_capital * GRID_TRADE_RATIO,
             )
             order_target_value(
-                symbol=symbol,
-                value=int(new_target_val),
+                symbol=symbol, value=int(new_target_val),
                 position_side=PositionSide_Long,
-                order_type=OrderType_Market,
-                price=0
+                order_type=OrderType_Market, price=0,
             )
             context.base_price = current_price
             context.grid_trade_count += 1
-            log(level='info', msg='【日内网格低吸】{} 价格 {:.2f}'.format(symbol, current_price), source='strategy')
+            log(level='info', msg='【日内网格低吸】{} 价格 {:.2f}'.format(
+                symbol, current_price), source='strategy')
 
         elif price_change >= GRID_STEP:
             new_target_val = max(
                 context.total_capital * MIN_POSITION_RATIO,
-                current_holding_val - context.total_capital * GRID_TRADE_RATIO
+                current_holding_val - context.total_capital * GRID_TRADE_RATIO,
             )
             order_target_value(
-                symbol=symbol,
-                value=int(new_target_val),
+                symbol=symbol, value=int(new_target_val),
                 position_side=PositionSide_Long,
-                order_type=OrderType_Market,
-                price=0
+                order_type=OrderType_Market, price=0,
             )
             context.base_price = current_price
             context.grid_trade_count += 1
-            log(level='info', msg='【日内网格高抛】{} 价格 {:.2f}'.format(symbol, current_price), source='strategy')
+            log(level='info', msg='【日内网格高抛】{} 价格 {:.2f}'.format(
+                symbol, current_price), source='strategy')
 
 
 def _execute_trades(context, target_portfolio, current_positions):
     """
-    执行目标仓位调整交易
-
-    使用 order_target_value 自动计算买卖差额
+    执行目标仓位调整。先卖出不在目标中的持仓，再调整目标仓位。
     """
-    # 先处理卖出：不在目标中的持仓清仓
     for symbol in current_positions:
         if symbol not in target_portfolio:
             order_target_value(
-                symbol=symbol,
-                value=0,
+                symbol=symbol, value=0,
                 position_side=PositionSide_Long,
-                order_type=OrderType_Market,
-                price=0
+                order_type=OrderType_Market, price=0,
             )
 
-    # 再处理目标仓位
     for symbol, target_val in target_portfolio.items():
         order_target_value(
-            symbol=symbol,
-            value=int(target_val),
+            symbol=symbol, value=int(target_val),
             position_side=PositionSide_Long,
-            order_type=OrderType_Market,
-            price=0
+            order_type=OrderType_Market, price=0,
         )
 
-    # 日志输出当前状态
     log(level='info', msg='状态: {} | 持仓: {} | 中轴价: {:.2f}'.format(
-        context.current_regime,
-        context.current_asset or '货基',
-        context.base_price
-    ), source='strategy')
+        context.current_regime, context.current_asset or '货基',
+        context.base_price), source='strategy')
 
 
 # ============================================================

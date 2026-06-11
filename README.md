@@ -14,9 +14,11 @@ quant
 │   │   └── ...
 │   └── strategies/             # 策略设计文档
 │       ├── multiFactorStockTradingStrategy.md
-│       └── etfMomentumGridStrategy.md
+│       ├── etfMomentumGridStrategy.md
+│       └── etfFilterPipeline.md
 ├── multi_factor_stock_strategy.py   # 多因子选股 + 再平衡 + 止损
 ├── etf_momentum_grid_strategy.py    # ETF 双动量 + 网格交易
+├── etf_filter_pipeline.py           # ETF 筛选管道（全市场扫描）
 ├── download_sdk_docs.py             # SDK 文档下载脚本
 └── requirements.txt
 ```
@@ -65,7 +67,17 @@ python etf_momentum_grid_strategy.py     # 回测模式
 - 状态机管理：空仓（货基）↔ 趋势持股
 - 网格交易高抛低吸（±2% 触发，预留 40% 资金给低吸）
 - 闲置资金自动配置货币基金
-- 详情：[策略文档](docs/strategies/etfMomentumGridStrategy.md)
+- ★ 集成 ETF 筛选管道，全市场动态筛选健康标的
+- 详情：[策略文档](docs/strategies/etfMomentumGridStrategy.md) | [筛选管道](docs/strategies/etfFilterPipeline.md)
+
+### ETF 筛选与数据清洗管道
+
+`etf_filter_pipeline.py`
+
+- 三层漏斗筛选：规模（AUM > 5亿）→ 流动性（20日均成交额 > 5000万）→ 折溢价（|rate| ≤ 1%）
+- 大类资产去重：每类只保留流动性最强的一只，防止影子共振
+- 可独立运行扫描全市场 ETF 健康度
+- 详情：[筛选管道文档](docs/strategies/etfFilterPipeline.md)
 
 ## 📚 SDK 文档
 
