@@ -1,128 +1,35 @@
-# Quant - 量化交易系统
+# 掘金量化 Python SDK 文档
+> 共 30 页，成功 30，失败 0
+## 根目录
+- [快速开始](快速开始.md)
+- [策略程序架构](策略程序架构.md)
+- [变量约定](变量约定.md)
+- [数据结构](数据结构.md)
+- [枚举常量](枚举常量.md)
+- [错误码](错误码.md)
 
-## 项目简介
-Quant是一个基于.NET Core的量化交易系统，提供完整的量化交易解决方案。系统集成了掘金量化数据接口，支持实时行情监控、策略回测、风险控制等功能。
-
-## 功能特性
-
-### 1. 交易服务
-- 交易记录服务：记录和查询历史交易
-- 国债逆回购服务：支持不同期限的国债逆回购交易
-- 交易分析服务：提供股票、账户和行业交易统计
-
-### 2. 风险控制
-- 止损止盈管理
-- 仓位控制
-- 行业限制
-- 风险指标计算
-
-### 3. 实时监控
-- 市场异常监控
-- 风险预警监控
-- 系统异常监控
-- 实时事件订阅
-
-### 4. 性能监控
-- 策略执行性能监控
-- 系统资源监控
-- API调用监控
-- 性能指标统计
-
-### 5. 交易成本优化
-- 最优交易时机
-- 最优交易数量
-- 最优交易价格
-- 交易成本分析
-
-## 技术架构
-
-### 开发环境
-- .NET Core 6.0+
-- Visual Studio 2022 / VS Code
-- Git
-
-### 主要依赖
-- Microsoft.Extensions.Logging
-- Microsoft.Extensions.DependencyInjection
-- System.Collections.Concurrent
-
-### 项目结构
-```
-src/
-├── Quant.Strategy/              # 策略核心模块
-│   ├── Services/               # 服务接口
-│   │   ├── Impl/              # 服务实现
-│   │   └── Interfaces/        # 接口定义
-│   └── Models/                # 数据模型
-├── Quant.Common/              # 公共模块
-└── Quant.Tests/              # 单元测试
-```
-
-## 快速开始
-
-### 1. 克隆项目
-```bash
-git clone https://github.com/molunshang/quant.git
-cd quant
-```
-
-### 2. 安装依赖
-```bash
-dotnet restore
-```
-
-### 3. 编译项目
-```bash
-dotnet build
-```
-
-### 4. 运行测试
-```bash
-dotnet test
-```
-
-## 使用说明
-
-### 配置服务
-```csharp
-services.AddScoped<ITradeHistoryService, JQTradeHistoryService>();
-services.AddScoped<IRepoService, JQRepoService>();
-services.AddScoped<ITradeAnalysisService, JQTradeAnalysisService>();
-services.AddScoped<IRiskControlService, JQRiskControlService>();
-services.AddScoped<IRealTimeMonitorService, JQRealTimeMonitorService>();
-services.AddScoped<IPerformanceMonitorService, JQPerformanceMonitorService>();
-```
-
-### 使用示例
-```csharp
-// 交易记录
-var tradeHistory = await _tradeHistoryService.RecordTrade(new TradeRecord
-{
-    StockCode = "000001",
-    TradeType = TradeType.Buy,
-    Price = 10.5m,
-    Quantity = 100
-});
-
-// 风险控制
-var canTrade = await _riskControlService.CanTrade("000001");
-var stopLoss = await _riskControlService.CheckStopLoss("000001", 10.0m);
-
-// 实时监控
-var marketAlert = await _monitorService.MonitorMarketAnomaly("000001");
-var riskAlert = await _monitorService.MonitorRiskAlert("000001");
-```
-
-## 贡献指南
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
-
-## 许可证
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-## 联系方式
-- 项目维护者：[molunshang](https://github.com/molunshang)
-- 项目地址：[https://github.com/molunshang/quant](https://github.com/molunshang/quant) 
+## API 介绍
+- [基本函数](API介绍/基本函数.md)
+- [交易函数](API介绍/交易函数.md)
+- [交易查询函数](API介绍/交易查询函数.md)
+- [两融交易函数](API介绍/两融交易函数.md)
+- [债券交易函数](API介绍/债券交易函数.md)
+- [基金交易函数](API介绍/基金交易函数.md)
+- [新股新债交易函数](API介绍/新股新债交易函数.md)
+- [算法交易函数](API介绍/算法交易函数.md)
+- [交易事件](API介绍/交易事件.md)
+- [数据事件](API介绍/数据事件.md)
+- [其他事件](API介绍/其他事件.md)
+- [数据订阅](API介绍/数据订阅.md)
+- [动态参数](API介绍/动态参数.md)
+- [标的池](API介绍/标的池.md)
+- [行情数据查询函数（免费）](API介绍/行情数据查询函数（免费）.md)
+- [股票财务数据及基础数据函数（免费）](API介绍/股票财务数据及基础数据函数（免费）.md)
+- [股票增值数据函数（付费）](API介绍/股票增值数据函数（付费）.md)
+- [期货基础数据函数（免费）](API介绍/期货基础数据函数（免费）.md)
+- [期货增值数据函数（付费）](API介绍/期货增值数据函数（付费）.md)
+- [基金增值数据函数（付费）](API介绍/基金增值数据函数（付费）.md)
+- [可转债增值数据函数（付费）](API介绍/可转债增值数据函数（付费）.md)
+- [通用数据函数（免费）](API介绍/通用数据函数（免费）.md)
+- [老版本数据函数](API介绍/老版本数据函数.md)
+- [其他函数](API介绍/其他函数.md)
