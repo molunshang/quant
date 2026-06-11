@@ -7,8 +7,8 @@ ETF 双动量 + 动态网格交易策略（集成 ETF 筛选管道）
 - 状态机管理：CASH（空仓持货基）和 TREND（趋势持股）
 - 趋势持股期间通过网格交易低吸高抛增减仓位
 - 闲置资金自动配置货币基金
-- ★ 集成 EtfFilterPipeline：每日盘前自动扫描全市场 ETF，
-  执行规模/流动性/折溢价/大类去重四层筛选，动态更新种子池
+- ★ 集成 EtfFilterPipeline：每周自动扫描全市场 ETF，
+    执行交易状态/流动性/波动率质量/大类去重四层筛选，动态更新种子池
 
 参考文档:
   docs/strategies/etfMomentumGridStrategy.md
@@ -20,13 +20,8 @@ from gm.api import *
 import numpy as np
 import pandas as pd
 
-# 筛选管道
-from etf_filter_pipeline import (
-    EtfFilterPipeline,
-    gm_fetch_all_etf_symbols,
-    gm_fetch_daily_amounts,
-    gm_get_etf_seed_pool,
-)
+# 筛选管道（仅需入口函数，内部封装了全流程）
+from etf_filter_pipeline import gm_get_etf_seed_pool
 
 
 # ============================================================
@@ -219,12 +214,10 @@ def _initialize_etf_pool(context):
     """
     try:
         end_time = context.now.strftime('%Y-%m-%d %H:%M:%S')
-        is_live = (context.mode == MODE_LIVE)
 
         pool = gm_get_etf_seed_pool(
             end_time=end_time,
             context=context,
-            check_premium=is_live,
         )
         if pool:
             return pool
