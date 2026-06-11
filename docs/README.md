@@ -1,5 +1,25 @@
 # 掘金量化 Python SDK 文档
-> 共 30 页，成功 30，失败 0
+
+## 安装
+
+支持3.6.5以上，3.7.*，3.8.*，3.9.*，3.10.*，3.11.*，3.12.*和3.13.*的 Python 版本
+
+支持 Windows 和 Linux 系统的 Python
+
+支持 64 位和 32 位的 Python
+
+掘金 Python SDK 名为 gm， 已经打包上传到 PYPI 库
+
+```bash
+python3 -m pip install gm -U -i https://mirrors.aliyun.com/pypi/simple/
+```
+其他可选择源
+https://pypi.tuna.tsinghua.edu.cn/simple
+https://mirror.baidu.com/pypi/simple/
+https://mirrors.cloud.tencent.com/pypi/simple/
+https://pypi.mirrors.ustc.edu.cn/simple/
+
+
 ## 根目录
 - [快速开始](快速开始.md)
 - [策略程序架构](策略程序架构.md)
