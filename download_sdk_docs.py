@@ -32,7 +32,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-OUTPUT_DIR = "./myquant_sdk_docs"
+OUTPUT_DIR = "./docs/sdk"
 
 # 请求间隔: 3-8 秒随机延迟 (反爬)
 MIN_DELAY = 3
