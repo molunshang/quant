@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股回测系统</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+:root { --bg:#0f1419; --panel:#1a1f27; --border:#2a313b; --text:#e6e9ef; --muted:#8a94a6; --accent:#4c9ffe; --green:#4caf50; --red:#f44336; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }
+.header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--border); }
+.header h1 { font-size:18px; }
+.header .sub { color:var(--muted); font-size:13px; }
+.main { display:flex; gap:16px; padding:16px 24px; }
+.controls { width:320px; flex-shrink:0; display:flex; flex-direction:column; gap:12px; }
+.panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; }
+.panel h3 { font-size:14px; margin-bottom:10px; color:var(--muted); font-weight:500; }
+label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+input, select, textarea { width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:8px 10px; font-size:13px; }
+textarea { font-family:ui-monospace, Menlo, monospace; font-size:12px; resize:vertical; }
+.btn { width:100%; padding:10px; border:none; border-radius:6px; background:var(--accent); color:#fff; font-size:14px; cursor:pointer; font-weight:600; }
+.btn:hover { filter:brightness(1.1); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.content { flex:1; display:flex; flex-direction:column; gap:16px; min-width:0; }
+.metrics { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:12px; }
+.metric { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px; }
+.metric .label { font-size:12px; color:var(--muted); }
+.metric .value { font-size:20px; font-weight:700; margin-top:4px; }
+.metric .value.pos { color:var(--green); } .metric .value.neg { color:var(--red); }
+.chart { background:var(--panel); border:1px solid var(--border); border-radius:8px; }
+.chart div { width:100%; height:320px; }
+.tabs { display:flex; gap:8px; margin-bottom:0; }
+.tab { padding:8px 16px; border-radius:6px 6px 0 0; background:var(--panel); border:1px solid var(--border); border-bottom:none; cursor:pointer; font-size:13px; color:var(--muted); }
+.tab.active { background:var(--accent); color:#fff; }
+.trades { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; max-height:260px; overflow:auto; }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th, td { padding:6px 10px; text-align:left; border-bottom:1px solid var(--border); }
+th { color:var(--muted); font-weight:500; }
+.buy { color:var(--red); } .sell { color:var(--green); }
+.status { font-size:12px; color:var(--muted); margin-top:8px; min-height:16px; }
+.hidden { display:none; }
+.strat-src { display:none; }
+#strategyType { margin-bottom:4px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📈 A股回测系统</h1>
+  <div class="sub">股票 · 基金 · ETF &nbsp;|&nbsp; 自定义策略 · Agent API</div>
+</div>
+
+<div class="main">
+  <!-- ===== 左侧控制面板 ===== -->
+  <div class="controls">
+    <div class="panel">
+      <h3>回测设置</h3>
+      <label for="symbol">交易标的</label>
+      <input id="symbol" list="symbol-list" value="600519" placeholder="代码或名称">
+      <datalist id="symbol-list"></datalist>
+      <label for="symbolType">类型</label>
+      <select id="symbolType">
+        <option value="">全部</option><option value="stock">股票</option>
+        <option value="etf">ETF</option><option value="fund">基金</option>
+      </select>
+      <label for="freq">K线频率</label>
+      <select id="freq">
+        <option value="daily" selected>日线</option>
+        <option value="60">60分钟</option><option value="30">30分钟</option>
+        <option value="15">15分钟</option><option value="5">5分钟</option><option value="1">1分钟</option>
+      </select>
+      <label for="start">起始日期</label><input id="start" value="2022-01-01">
+      <label for="end">结束日期</label><input id="end" value="2024-12-31">
+      <label for="adjust">复权</label>
+      <select id="adjust"><option value="qfq" selected>前复权</option><option value="hfq">后复权</option><option value="none">不复权</option></select>
+      <label for="cash">初始资金</label><input id="cash" type="number" value="100000">
+    </div>
+
+    <div class="panel">
+      <h3>策略</h3>
+      <label for="strategyType">策略来源</label>
+      <select id="strategyType">
+        <option value="builtin" selected>内置策略</option>
+        <option value="custom">自定义源码</option>
+      </select>
+      <div id="builtinWrap">
+        <label for="strategyName">选择策略</label>
+        <select id="strategyName"></select>
+      </div>
+      <div id="customWrap" class="strat-src">
+        <label for="strategySrc">策略源码（定义 strategy(ctx, params)）</label>
+        <textarea id="strategySrc" rows="10" placeholder="def strategy(ctx, params):
+    # 示例：跌破20日均线买入
+    bars = ctx.bars_upto()
+    if len(bars) < 20:
+        return
+    ma = bars['close'].astype(float).rolling(20).mean().iloc[-1]
+    if ctx.price &lt; ma and ctx.shares == 0:
+        ctx.buy()
+"></textarea>
+      </div>
+      <label for="paramsJson">策略参数 (JSON)</label>
+      <textarea id="paramsJson" rows="3" placeholder='{"short": 20, "long": 60}'></textarea>
+    </div>
+
+    <button id="runBtn" class="btn">▶ 运行回测</button>
+    <div id="status" class="status"></div>
+  </div>
+
+  <!-- ===== 右侧结果区 ===== -->
+  <div class="content" id="results" style="display:none">
+    <div class="metrics" id="metrics"></div>
+    <div class="tabs">
+      <div class="tab active" data-tab="equity">权益曲线</div>
+      <div class="tab" data-tab="kline">K线买卖点</div>
+      <div class="tab" data-tab="drawdown">回撤</div>
+    </div>
+    <div class="chart" id="equityChart"><div id="chartEquity"></div></div>
+    <div class="chart hidden" id="klineChart"><div id="chartKline"></div></div>
+    <div class="chart hidden" id="drawdownChart"><div id="chartDrawdown"></div></div>
+    <div class="trades">
+      <h3 style="font-size:14px;color:var(--muted);margin-bottom:8px;">交易记录</h3>
+      <table id="tradesTable">
+        <thead><tr><th>日期</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>佣金</th><th>印花税</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let equityChart, klineChart, drawdownChart;
+
+// ---- load symbols & strategies ----
+async function loadSymbols() {
+  const type = $('symbolType').value;
+  const r = await fetch(`/api/symbols?type=${type}&limit=500`);
+  const data = await r.json();
+  const dl = $('symbol-list');
+  dl.innerHTML = '';
+  data.symbols.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.code; opt.label = `${s.name} (${s.code})`;
+    dl.appendChild(opt);
+  });
+}
+async function loadStrategies() {
+  const r = await fetch('/api/strategies');
+  const data = await r.json();
+  const sel = $('strategyName');
+  sel.innerHTML = '';
+  data.strategies.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.name; opt.textContent = s.description || s.name;
+    sel.appendChild(opt);
+  });
+}
+$('symbolType').addEventListener('change', loadSymbols);
+$('strategyType').addEventListener('change', () => {
+  const custom = $('strategyType').value === 'custom';
+  $('builtinWrap').style.display = custom ? 'none' : '';
+  $('customWrap').style.display = custom ? '' : 'none';
+});
+
+// ---- tabs ----
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const target = tab.dataset.tab;
+    ['equity','kline','drawdown'].forEach(k => {
+      $(`${k}Chart`).classList.toggle('hidden', k !== target);
+    });
+    if (target === 'equity') equityChart?.resize();
+    if (target === 'kline') klineChart?.resize();
+    if (target === 'drawdown') drawdownChart?.resize();
+  });
+});
+
+// ---- run backtest ----
+async function runBacktest() {
+  const status = $('status');
+  status.textContent = '回测中...';
+  $('runBtn').disabled = true;
+
+  let strategy;
+  if ($('strategyType').value === 'custom') {
+    strategy = { name: 'user_' + Date.now(), source: $('strategySrc').value };
+  } else {
+    strategy = $('strategyName').value;
+  }
+  let params = {};
+  try { params = JSON.parse($('paramsJson').value || '{}'); } catch(e) { status.textContent = '⚠ 参数 JSON 格式错误'; $('runBtn').disabled = false; return; }
+
+  const payload = {
+    symbol: $('symbol').value.trim(),
+    freq: $('freq').value,
+    start: $('start').value,
+    end: $('end').value,
+    adjust: $('adjust').value,
+    strategy,
+    params,
+    initial_cash: parseFloat($('cash').value),
+  };
+
+  try {
+    const r = await fetch('/api/backtest', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.success) throw new Error(data.detail || '回测失败');
+    renderResults(data);
+    status.textContent = `✅ 完成：${data.symbol_name} ${data.freq} · ${data.strategy}`;
+  } catch(e) {
+    status.textContent = `❌ ${e.message}`;
+  } finally {
+    $('runBtn').disabled = false;
+  }
+}
+$('runBtn').addEventListener('click', runBacktest);
+
+// ---- render ----
+function renderResults(data) {
+  $('results').style.display = 'flex';
+  const m = data.metrics;
+  const fmtPct = v => `${(v*100).toFixed(2)}%`;
+  const fmtNum = v => Number(v).toFixed(2);
+  const items = [
+    ['总收益', fmtPct(m.total_return), m.total_return>=0],
+    ['年化收益', fmtPct(m.annual_return), m.annual_return>=0],
+    ['最大回撤', fmtPct(m.max_drawdown), false],
+    ['夏普比率', fmtNum(m.sharpe), m.sharpe>=0],
+    ['波动率', fmtPct(m.volatility), false],
+    ['胜率', fmtPct(m.win_rate), m.win_rate>=0.5],
+    ['交易次数', m.n_trades, true],
+    ['最终权益', fmtNum(m.final_equity), m.final_equity>=m.initial_equity],
+  ];
+  $('metrics').innerHTML = items.map(([l,v,pos]) =>
+    `<div class="metric"><div class="label">${l}</div><div class="value ${pos?'pos':'neg'}">${v}</div></div>`
+  ).join('');
+
+  // trades
+  const tbody = $('tradesTable').querySelector('tbody');
+  tbody.innerHTML = data.trades.map(t => {
+    const cls = t.side === 'buy' ? 'buy' : 'sell';
+    const dir = t.side === 'buy' ? '买入' : '卖出';
+    return `<tr><td>${t.date}</td><td class="${cls}">${dir}</td><td>${t.shares}</td><td>${t.price}</td><td>${t.amount.toFixed(2)}</td><td>${t.commission.toFixed(2)}</td><td>${(t.stamp_duty||0).toFixed(2)}</td></tr>`;
+  }).join('');
+
+  // charts
+  equityChart = chart('chartEquity', buildEquityOption(data));
+  klineChart = chart('chartKline', buildKlineOption(data));
+  drawdownChart = chart('chartDrawdown', buildDrawdownOption(data));
+}
+
+function chart(elId, option) {
+  const el = $(elId);
+  const c = echarts.getInstanceByDom(el) || echarts.init(el);
+  c.setOption(option, true);
+  return c;
+}
+function buildEquityOption(data) {
+  const eq = data.equity_curve;
+  const dates = eq.map(r => r.date);
+  const initial = data.metrics.initial_equity;
+  const s = eq.map(r => (r.equity/initial-1)*100);
+  const b0 = eq[0].benchmark;
+  const b = eq.map(r => (r.benchmark/b0-1)*100);
+  return {
+    tooltip:{trigger:'axis'}, legend:{data:['策略','基准'],bottom:0},
+    grid:{left:50,right:20,top:30,bottom:40},
+    xAxis:{type:'category',data:dates}, yAxis:{type:'value',name:'%',axisLabel:{formatter:'{value}%'}},
+    series:[
+      {name:'策略',type:'line',data:s.map(v=>+v.toFixed(3)),smooth:true,symbol:'none',lineStyle:{width:2}},
+      {name:'基准',type:'line',data:b.map(v=>+v.toFixed(3)),smooth:true,symbol:'none',lineStyle:{type:'dashed'}}
+    ]
+  };
+}
+function buildDrawdownOption(data) {
+  const eq = data.equity_curve;
+  const dates = eq.map(r=>r.date);
+  let peak = -Infinity;
+  const dd = eq.map(r=>{ peak=Math.max(peak,r.equity); return ((r.equity/peak-1)*100); });
+  return {
+    tooltip:{trigger:'axis'}, grid:{left:50,right:20,top:30,bottom:40},
+    xAxis:{type:'category',data:dates}, yAxis:{type:'value',axisLabel:{formatter:'{value}%'}},
+    series:[{name:'回撤',type:'line',data:dd.map(v=>+v.toFixed(3)),symbol:'none',
+      lineStyle:{color:'#f44336',width:1},areaStyle:{color:'#f44336',opacity:.15}}]
+  };
+}
+function buildKlineOption(data) {
+  const eq = data.equity_curve;
+  const dates = eq.map(r=>r.date);
+  // kline from equity curve only carries close — fetch via data api isn't available; use close as all OHLC
+  // Better: reuse trades for markers
+  const ohlc = eq.map(r=>[r.close,r.close,r.close,r.close]);
+  const buys = data.trades.filter(t=>t.side==='buy').map(t=>({name:'买入',coord:[t.date,t.price],value:t.price}));
+  const sells = data.trades.filter(t=>t.side==='sell').map(t=>({name:'卖出',coord:[t.date,t.price],value:t.price}));
+  return {
+    tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
+    grid:{left:50,right:20,top:30,bottom:40}, xAxis:{type:'category',data:dates}, yAxis:{type:'value',scale:true},
+    dataZoom:[{type:'inside',start:60,end:100}],
+    series:[
+      {name:'K线',type:'candlestick',data:ohlc,
+       itemStyle:{color:'#f44336',color0:'#4caf50',borderColor:'#f44336',borderColor0:'#4caf50'}},
+      {name:'买入',type:'scatter',data:buys,symbol:'triangle',symbolSize:11,itemStyle:{color:'#f44336'}},
+      {name:'卖出',type:'scatter',data:sells,symbol:'triangle',symbolRotate:180,symbolSize:11,itemStyle:{color:'#4caf50'}}
+    ]
+  };
+}
+
+// init
+loadSymbols(); loadStrategies();
+</script>
+</body>
+</html>
