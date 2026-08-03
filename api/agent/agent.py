@@ -156,22 +156,26 @@ class LLMAgent:
                     })
                     if bus:
                         bus.publish(session_id, {"type": "tool_error", "name": tc.name, "error": str(e)})
-            # backtests submitted this turn: wait for the batch, attach results
+            # backtests submitted this turn: wait for the batch, attach results.
+            # The summary+state snapshot is emitted as a separate plain-text user
+            # message AFTER the tool_results user message, not as an extra tool_result
+            # (a tool_result's tool_use_id must match a tool_use block in the preceding
+            # assistant message; an orphan id like "__state__" is rejected with HTTP 400
+            # by the Messages API). Consecutive user messages are valid and are
+            # combined into a single turn by the API.
+            state_text = None
             if any(tc.name == "run_backtest" for tc in resp.tool_uses):
                 results = self.executor.wait_all(timeout=300)
                 self.executor.reset_batch()
-                # append a compact state snapshot as an extra tool_result
                 snapshot = _build_state_snapshot(self._ctx, goal or user_message)
                 backtest_summary = "\n".join(_result_to_text(r) for r in results)
-                tool_results.append({
-                    "tool_use_id": "__state__",
-                    "content": f"回测结果汇总：\n{backtest_summary}\n当前状态：{json.dumps(snapshot, ensure_ascii=False)}",
-                    "is_error": False,
-                })
+                state_text = f"回测结果汇总：\n{backtest_summary}\n当前状态：{json.dumps(snapshot, ensure_ascii=False)}"
                 if bus:
                     bus.publish(session_id, {"type": "backtest_results", "results": results})
             messages.append({"role": "assistant", "content": [{"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input} for tc in resp.tool_uses]})
             messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tr["tool_use_id"], "content": tr["content"], "is_error": tr["is_error"]} for tr in tool_results]})
+            if state_text is not None:
+                messages.append({"role": "user", "content": state_text})
         if bus:
             bus.publish(session_id, {"type": "done", "report": final_text})
         return {"session_id": session_id, "report": final_text, "turns": turn + 1}

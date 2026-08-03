@@ -143,3 +143,52 @@ def test_hydrated_manager_resolves_draft_name(monkeypatch, tmp_path):
     finally:
         ex.shutdown()
     assert captured.get("resolved") == "ma"
+
+
+def test_cross_turn_register_then_backtest_resolves(monkeypatch, tmp_path):
+    """Turn 1 calls register_strategy via the tool (writes a real store draft);
+    turn 2 calls run_backtest with strategy_ref=<registered name>. The draft must
+    resolve through the hydrated StrategyManager — a fresh manager would KeyError."""
+    from api.agent.executor import BacktestExecutor
+    from api.agent.store import StrategyStore
+
+    store = StrategyStore(db_path=str(tmp_path / "t.db"))
+
+    captured = {}
+
+    def fake_run_backtest(symbol, strategy_ref, params=None, freq="daily", start="2020-01-01",
+                          end="2024-12-31", adjust="qfq", initial_cash=100_000.0,
+                          strategy_manager=None, data_layer=None):
+        # strategy_ref must be the name registered by the tool in turn 1; a
+        # non-hydrated manager would raise KeyError here.
+        func, name = strategy_manager.resolve(strategy_ref)
+        captured["resolved"] = name
+        return {"success": True, "symbol": symbol, "symbol_name": "测试ETF", "freq": freq,
+                "metrics": {"total_return": 0.2, "annual_return": 0.12, "max_drawdown": -0.10},
+                "equity_curve": [], "trades": [], "strategy": name, "params": params or {}}
+
+    import api.agent.executor as exmod
+    monkeypatch.setattr(exmod, "run_backtest", fake_run_backtest)
+
+    provider = FakeProvider([
+        LLMResponse(text=None, tool_uses=[
+            ToolCall(id="1", name="register_strategy",
+                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
+        ]),
+        LLMResponse(text=None, tool_uses=[
+            ToolCall(id="2", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+        ]),
+        LLMResponse(text="完成", tool_uses=[]),
+    ])
+    ex = BacktestExecutor()
+    agent = LLMAgent(provider=provider, store=store, executor=ex,
+                     max_turns=5, max_tools_per_turn=5)
+    bus = FakeBus()
+    try:
+        agent.run("s1", "注册 ma 并回测", bus=bus)
+    finally:
+        ex.shutdown()
+    # the tool wrote the draft to the real store...
+    assert store.get_source("ma") is not None
+    # ...and turn 2's run_backtest resolved that draft by name.
+    assert captured.get("resolved") == "ma"
