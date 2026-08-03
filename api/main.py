@@ -120,6 +120,11 @@ def meta():
     }
 
 
+from .agent.api import register_agent_routes
+
+register_agent_routes(app)
+
+
 # ---- chart data endpoints (agent-friendly, same data as web charts) ----
 @app.post("/api/chart/equity")
 def chart_equity(req: BacktestRequest):

@@ -17,7 +17,7 @@ def _now() -> str:
 class StrategyStore:
     def __init__(self, db_path: str | None = None):
         os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
-        self.conn = sqlite3.connect(db_path or DB_PATH)
+        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -196,7 +196,7 @@ class StrategyStore:
 class ChatStore:
     def __init__(self, db_path: str | None = None):
         os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
-        self.conn = sqlite3.connect(db_path or DB_PATH)
+        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
