@@ -28,6 +28,20 @@ def test_draft_publish_versions(tmp_path):
     s.close()
 
 
+def test_get_source_returns_draft_source(tmp_path):
+    s = StrategyStore(db_path=str(tmp_path / "t.db"))
+    s.register_draft("ma", "def strategy(ctx, params):\n    pass v1", "sma v1")
+    s.register_draft("ma", "def strategy(ctx, params):\n    pass v2", "sma v2")
+    # no version -> latest (highest) version source
+    assert s.get_source("ma") == "def strategy(ctx, params):\n    pass v2"
+    assert s.get_source("ma", 1) == "def strategy(ctx, params):\n    pass v1"
+    assert s.get_source("ma", 2) == "def strategy(ctx, params):\n    pass v2"
+    # unknown version / unknown strategy -> None
+    assert s.get_source("ma", 99) is None
+    assert s.get_source("nope") is None
+    s.close()
+
+
 def test_publish_unknown_strategy_raises(tmp_path):
     s = StrategyStore(db_path=str(tmp_path / "t.db"))
     with pytest.raises(KeyError):

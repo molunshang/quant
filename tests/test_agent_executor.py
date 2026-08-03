@@ -50,3 +50,29 @@ def test_submit_and_wait_all(monkeypatch):
         assert r3[0]["result"]["success"] is True
     finally:
         ex.shutdown()
+
+
+def test_submit_forwards_strategy_manager(monkeypatch):
+    """BacktestExecutor constructed with a strategy_manager threads it into run_backtest."""
+    import api.agent.executor as mod
+    from strategies.manager import StrategyManager
+
+    captured = {}
+
+    def fake_run_backtest(symbol, strategy_ref, params=None, freq="daily", start="", end="",
+                          adjust="qfq", initial_cash=100_000.0, strategy_manager=None, data_layer=None):
+        captured["strategy_manager"] = strategy_manager
+        return {"success": True, "symbol": symbol, "symbol_name": "x", "freq": freq,
+                "metrics": {"total_return": 0.1}, "equity_curve": [], "trades": [],
+                "strategy": strategy_ref, "params": params or {}}
+
+    monkeypatch.setattr(mod, "run_backtest", fake_run_backtest)
+    sm = StrategyManager()
+    ex = BacktestExecutor(strategy_manager=sm)
+    try:
+        ex.submit("600519", "buy_and_hold", {})
+        results = ex.wait_all(timeout=30)
+    finally:
+        ex.shutdown()
+    assert captured["strategy_manager"] is sm
+    assert results[0]["status"] == "done"

@@ -21,8 +21,9 @@ class BacktestJob:
 
 
 class BacktestExecutor:
-    def __init__(self, initial_cash: float = 100_000.0, max_workers: int = 4):
+    def __init__(self, initial_cash: float = 100_000.0, max_workers: int = 4, strategy_manager=None):
         self.initial_cash = initial_cash
+        self._strategy_manager = strategy_manager
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         self._jobs: dict[int, BacktestJob] = {}
         self._futures: list[concurrent.futures.Future] = []
@@ -44,6 +45,7 @@ class BacktestExecutor:
             end=end,
             adjust=adjust,
             initial_cash=self.initial_cash,
+            strategy_manager=self._strategy_manager,
         )
         self._futures.append(fut)
         return job_id

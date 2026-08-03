@@ -1,0 +1,177 @@
+"""LLMAgent: state-machine tool loop driving an LLM to meet a user goal."""
+from __future__ import annotations
+
+import json
+import threading
+import uuid
+from collections import deque
+from typing import Generator
+
+from strategies.manager import StrategyManager
+
+from .provider import LLMProvider, LLMResponse, ToolCall
+from .tools import TOOLS, AgentToolContext
+
+
+def build_system_prompt(goal: str | None = None) -> str:
+    lines = [
+        "你是A股量化策略优化助手。用户给出投资目标（如年化收益、超额收益、最大回撤）。",
+        "你的工作流程：",
+        "1. 先 list_symbols 选标的（可并行多个）。",
+        "2. 用 register_strategy 编写/修改策略草稿（Python 源码，定义 strategy(ctx, params)，用 ctx.buy()/ctx.sell()）。",
+        "3. 用 run_backtest 提交回测（strategy_ref 用当前草稿名），可一次提交多个并行。",
+        "4. 查看回测指标，用 check_goal 校验是否达标。未达标则修改草稿再回测。",
+        "5. 达标后必须用 publish_strategy（goal_met=true）发布。",
+        "工具结果会被合并到下一轮。达成目标后给出简短中文汇报。",
+    ]
+    if goal:
+        lines.append(f"\n用户目标：{goal}")
+    return "\n".join(lines)
+
+
+def _build_state_snapshot(ctx: AgentToolContext, goal: str | None) -> dict:
+    drafts = []
+    for s in ctx.store.list_strategies():
+        g = ctx.store.get_strategy(s["name"])
+        if g is None:
+            continue
+        drafts.append({
+            "name": g["name"],
+            "status": g["status"],
+            "current_version": g["current_version"],
+        })
+    return {"goal": goal, "strategies": drafts}
+
+
+def _result_to_text(res: dict) -> str:
+    """Compact backtest result for LLM context."""
+    r = res.get("result")
+    if r is None:
+        return f"回测 job #{res.get('job_id')} 失败: {res.get('error')}"
+    m = r.get("metrics", {})
+    keep = {k: m.get(k) for k in
+            ("total_return", "annual_return", "max_drawdown", "sharpe", "volatility", "win_rate", "n_trades")}
+    return json.dumps({
+        "job_id": res.get("job_id"),
+        "symbol": r.get("symbol"),
+        "symbol_name": r.get("symbol_name"),
+        "metrics": keep,
+    }, ensure_ascii=False)
+
+
+class EventBus:
+    """In-memory per-session event queue (drained on read)."""
+    def __init__(self):
+        self._sessions: dict[str, deque] = {}
+        self._cond = threading.Condition()
+
+    def create_session(self) -> str:
+        sid = uuid.uuid4().hex[:12]
+        with self._cond:
+            self._sessions[sid] = deque()
+        return sid
+
+    def publish(self, session_id: str, event: dict):
+        with self._cond:
+            self._sessions.setdefault(session_id, deque()).append(event)
+            self._cond.notify_all()
+
+    def stream(self, session_id: str) -> Generator[dict, None, None]:
+        """Drain queued events, then wait for new ones (caller handles heartbeat/timeout)."""
+        while True:
+            with self._cond:
+                q = self._sessions.get(session_id)
+                if q:
+                    yield q.popleft()
+                    continue
+                if self._sessions.get(session_id) is None or getattr(self, "_stopped", False):
+                    return
+                self._cond.wait(timeout=15.0)
+            yield {"type": "heartbeat"}  # signal caller to send SSE :ping
+
+
+class LLMAgent:
+    def __init__(self, provider, store, executor, max_turns=10, max_tools_per_turn=5):
+        self.provider = provider
+        self.store = store
+        self.executor = executor
+        self.max_turns = max_turns
+        self.max_tools_per_turn = max_tools_per_turn
+        self._manager = StrategyManager()
+        self._ctx = AgentToolContext(store=store, executor=executor, strategy_manager=self._manager)
+        # Bridge store drafts -> run_backtest: the executor hands this shared,
+        # per-turn hydrated manager to api.runner.run_backtest on every submit.
+        if hasattr(executor, "_strategy_manager"):
+            executor._strategy_manager = self._manager
+
+    def _hydrate_manager(self):
+        """Load the current store drafts into the shared StrategyManager so
+        run_backtest(strategy_ref=<name>) resolves the draft source."""
+        for s in self._ctx.store.list_strategies():
+            src = self._ctx.store.get_source(s["name"])
+            if src is not None:
+                self._ctx.strategy_manager.register(s["name"], src)
+
+    def _tool_name_to_fn(self, name: str):
+        import api.agent.tools as T
+        return {
+            "list_symbols": T.list_symbols,
+            "run_backtest": T.run_backtest,
+            "register_strategy": T.register_strategy,
+            "list_strategies": T.list_strategies,
+            "publish_strategy": T.publish_strategy,
+            "check_goal": T.check_goal,
+        }[name]
+
+    def run(self, session_id: str, user_message: str, goal: str | None = None,
+            bus: EventBus | None = None) -> dict:
+        system = build_system_prompt(goal or user_message)
+        # messages: user goal first, then alternating tool_use/tool_result as the loop runs.
+        messages = [{"role": "user", "content": user_message}]
+        final_text = ""
+        for turn in range(self.max_turns):
+            if bus:
+                bus.publish(session_id, {"type": "turn", "turn": turn + 1})
+            resp = self.provider.complete(system=system, messages=messages, tools=TOOLS)
+            if resp.text:
+                final_text = resp.text
+            if not resp.tool_uses:
+                break  # LLM done (report)
+            # hydrate before tool execution so run_backtest(strategy_ref=<draft name>) resolves
+            self._hydrate_manager()
+            # execute tools (bounded concurrency), collect tool_results
+            tool_results = []
+            for tc in resp.tool_uses[: self.max_tools_per_turn]:
+                try:
+                    fn = self._tool_name_to_fn(tc.name)
+                    out = fn(tc.input, self._ctx)
+                    tool_results.append({
+                        "tool_use_id": tc.id, "content": out, "is_error": False,
+                    })
+                    if bus:
+                        bus.publish(session_id, {"type": "tool", "name": tc.name, "output": out})
+                except Exception as e:  # noqa: BLE001 - tool error surfaced to LLM
+                    tool_results.append({
+                        "tool_use_id": tc.id, "content": f"ERROR: {e}", "is_error": True,
+                    })
+                    if bus:
+                        bus.publish(session_id, {"type": "tool_error", "name": tc.name, "error": str(e)})
+            # backtests submitted this turn: wait for the batch, attach results
+            if any(tc.name == "run_backtest" for tc in resp.tool_uses):
+                results = self.executor.wait_all(timeout=300)
+                self.executor.reset_batch()
+                # append a compact state snapshot as an extra tool_result
+                snapshot = _build_state_snapshot(self._ctx, goal or user_message)
+                backtest_summary = "\n".join(_result_to_text(r) for r in results)
+                tool_results.append({
+                    "tool_use_id": "__state__",
+                    "content": f"回测结果汇总：\n{backtest_summary}\n当前状态：{json.dumps(snapshot, ensure_ascii=False)}",
+                    "is_error": False,
+                })
+                if bus:
+                    bus.publish(session_id, {"type": "backtest_results", "results": results})
+            messages.append({"role": "assistant", "content": [{"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input} for tc in resp.tool_uses]})
+            messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tr["tool_use_id"], "content": tr["content"], "is_error": tr["is_error"]} for tr in tool_results]})
+        if bus:
+            bus.publish(session_id, {"type": "done", "report": final_text})
+        return {"session_id": session_id, "report": final_text, "turns": turn + 1}

@@ -141,6 +141,30 @@ class StrategyStore:
         self.conn.commit()
         return {"name": name, "version": version, "status": "published", "metrics": metrics}
 
+    def get_source(self, name: str, version: int | None = None) -> str | None:
+        """Return the `source` of a strategy version, or the latest version's
+        source if `version` is None. Returns None if the strategy or version
+        does not exist."""
+        sid_row = self.conn.execute(
+            "SELECT id FROM strategies WHERE name = ?", (name,)
+        ).fetchone()
+        if sid_row is None:
+            return None
+        if version is None:
+            row = self.conn.execute(
+                "SELECT source FROM strategy_versions WHERE strategy_id = ? "
+                "ORDER BY version DESC LIMIT 1",
+                (sid_row["id"],),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT source FROM strategy_versions WHERE strategy_id = ? AND version = ?",
+                (sid_row["id"], version),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["source"]
+
     def get_versions(self, name: str) -> list[dict]:
         sid_row = self.conn.execute(
             "SELECT id FROM strategies WHERE name = ?", (name,)
