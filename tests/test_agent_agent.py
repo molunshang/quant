@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from types import SimpleNamespace
 
 import pytest
 
@@ -192,3 +193,208 @@ def test_cross_turn_register_then_backtest_resolves(monkeypatch, tmp_path):
     assert store.get_source("ma") is not None
     # ...and turn 2's run_backtest resolved that draft by name.
     assert captured.get("resolved") == "ma"
+
+
+def test_same_turn_register_then_backtest_resolves(tmp_path):
+    """register_strategy + run_backtest in the SAME turn: the draft written by the
+    tool must resolve when its backtest runs. Hydration happens after tool
+    execution and before wait_all, so the manager is populated in time."""
+    from api.agent.store import StrategyStore
+
+    store = StrategyStore(db_path=str(tmp_path / "t.db"))
+    captured = {}
+
+    class SyncExecutor:
+        """Resolves strategy_ref in wait_all (main thread, after hydration) exactly
+        like the executor worker threads do in production."""
+        def __init__(self):
+            self._strategy_manager = None
+            self.jobs = []
+        def submit(self, symbol, strategy_ref, params=None, freq="daily", start="2020-01-01",
+                   end="2024-12-31", adjust="qfq"):
+            self.jobs.append({"symbol": symbol, "strategy_ref": strategy_ref, "params": params or {}})
+            return len(self.jobs)
+        def wait_all(self, timeout=300):
+            results = []
+            for j in self.jobs:
+                func, name = self._strategy_manager.resolve(j["strategy_ref"])
+                captured["resolved"] = name
+                results.append({"job_id": 1, "symbol": j["symbol"], "status": "done",
+                                "result": {"metrics": {"annual_return": 0.12, "max_drawdown": -0.10},
+                                           "symbol_name": "测试ETF"},
+                                "error": None})
+            self.jobs = []
+            return results
+        def reset_batch(self):
+            self.jobs = []
+        def shutdown(self):
+            pass
+
+    provider = FakeProvider([
+        LLMResponse(text=None, tool_uses=[
+            ToolCall(id="1", name="register_strategy",
+                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
+            ToolCall(id="2", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+        ]),
+        LLMResponse(text="完成", tool_uses=[]),
+    ])
+    ex = SyncExecutor()
+    agent = LLMAgent(provider=provider, store=store, executor=ex,
+                     max_turns=5, max_tools_per_turn=5)
+    bus = FakeBus()
+    agent.run("s1", "注册 ma 并回测", bus=bus)
+    # the tool wrote the draft to the real store in this same turn...
+    assert store.get_source("ma") is not None
+    # ...and the same turn's run_backtest resolved it by name.
+    assert captured.get("resolved") == "ma"
+
+
+def test_agent_loop_openai_wire_format(monkeypatch):
+    """Drive the loop through the real OpenAICompatProvider (mocked SDK) and assert
+    the messages the SDK receives are OpenAI-valid: assistant tool_calls with
+    function.arguments JSON, and role:'tool' result messages."""
+    from api.agent.provider import OpenAICompatProvider
+
+    responses = [
+        {"choices": [{"message": {
+            "content": None,
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "check_goal", "arguments": '{"metrics": {"annual_return": 0.12}, "constraints": {"annual_return": 0.10}}'},
+            }],
+        }}]},
+        {"choices": [{"message": {"content": "目标达成", "tool_calls": None}}]},
+    ]
+    captured = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.append(kwargs)
+            return responses.pop(0)
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+    monkeypatch.setattr("api.agent.provider.OpenAI", FakeClient)
+    provider = OpenAICompatProvider(api_key="k", base_url="http://x", model="m1")
+    agent = LLMAgent(provider=provider, store=FakeStore(), executor=FakeExecutor(),
+                     max_turns=5, max_tools_per_turn=5)
+    bus = FakeBus()
+    report = agent.run("s1", "做年化10%", goal="年化>=10%", bus=bus)
+    assert "目标达成" in report["report"]
+    # turn 1: system + initial user message only
+    assert captured[0]["messages"][0]["role"] == "system"
+    assert captured[0]["messages"][1] == {"role": "user", "content": "做年化10%"}
+    # turn 2: the loop has appended assistant tool_calls + tool results
+    msgs = captured[1]["messages"]
+    assert msgs[0]["role"] == "system"
+    assert msgs[1] == {"role": "user", "content": "做年化10%"}
+    # assistant: OpenAI function-call wire shape
+    asst = msgs[2]
+    assert asst["role"] == "assistant"
+    assert asst["content"] is None
+    assert asst["tool_calls"][0]["id"] == "call_1"
+    assert asst["tool_calls"][0]["type"] == "function"
+    assert asst["tool_calls"][0]["function"]["name"] == "check_goal"
+    assert json.loads(asst["tool_calls"][0]["function"]["arguments"])["constraints"]["annual_return"] == 0.10
+    # tool result: role "tool" with matching tool_call_id
+    tool_msg = msgs[3]
+    assert tool_msg["role"] == "tool"
+    assert tool_msg["tool_call_id"] == "call_1"
+    assert "met" in tool_msg["content"]
+
+
+def test_agent_loop_anthropic_wire_format(monkeypatch):
+    """Drive the loop through the real AnthropicProvider (mocked SDK) and assert the
+    messages the SDK receives are Anthropic-valid: assistant content blocks of type
+    tool_use, user content blocks of type tool_result, system at the top level."""
+    from api.agent.provider import AnthropicProvider
+
+    responses = [
+        SimpleNamespace(content=[
+            SimpleNamespace(type="tool_use", id="toolu_1", name="check_goal",
+                            input={"metrics": {"annual_return": 0.12},
+                                   "constraints": {"annual_return": 0.10}}),
+        ]),
+        SimpleNamespace(content=[SimpleNamespace(type="text", text="目标达成")]),
+    ]
+    captured = []
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            captured.append(kwargs)
+            return responses.pop(0)
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr("api.agent.provider.anthropic.Anthropic", FakeAnthropic)
+    provider = AnthropicProvider(api_key="k", model="claude-test")
+    agent = LLMAgent(provider=provider, store=FakeStore(), executor=FakeExecutor(),
+                     max_turns=5, max_tools_per_turn=5)
+    bus = FakeBus()
+    report = agent.run("s1", "做年化10%", goal="年化>=10%", bus=bus)
+    assert "目标达成" in report["report"]
+    # turn 1: system + initial user message only
+    assert captured[0]["system"] == build_system_prompt("年化>=10%")
+    assert captured[0]["messages"] == [{"role": "user", "content": "做年化10%"}]
+    # turn 2: the loop has appended assistant tool_calls + tool results
+    kwargs = captured[1]
+    assert kwargs["system"] == build_system_prompt("年化>=10%")
+    msgs = kwargs["messages"]
+    assert msgs[0] == {"role": "user", "content": "做年化10%"}
+    asst = msgs[1]
+    assert asst["role"] == "assistant"
+    assert asst["content"][0]["type"] == "tool_use"
+    assert asst["content"][0]["id"] == "toolu_1"
+    assert asst["content"][0]["name"] == "check_goal"
+    assert asst["content"][0]["input"]["constraints"]["annual_return"] == 0.10
+    usr = msgs[2]
+    assert usr["role"] == "user"
+    assert usr["content"][0]["type"] == "tool_result"
+    assert usr["content"][0]["tool_use_id"] == "toolu_1"
+    assert usr["content"][0]["is_error"] is False
+
+
+def test_provider_error_publishes_error_event_and_returns_report():
+    """C2: provider.complete raising must not propagate — LLMAgent.run publishes
+    an SSE error event and returns a report containing the message."""
+    class BoomProvider:
+        def complete(self, *, system, messages, tools, model=None, max_tokens=4096):
+            raise RuntimeError("provider boom")
+
+    agent = LLMAgent(provider=BoomProvider(), store=FakeStore(), executor=FakeExecutor(),
+                     max_turns=5, max_tools_per_turn=5)
+    bus = FakeBus()
+    report = agent.run("s1", "hi", bus=bus)
+    assert "provider boom" in report["report"]
+    assert report.get("error") == "provider boom"
+    assert any(ev.get("type") == "error" and "provider boom" in ev.get("error", "") for ev in bus.events)
+
+
+def test_wait_all_error_publishes_error_event_and_returns_report():
+    """C2: executor.wait_all raising must not propagate — publish error event,
+    return a report rather than crashing the daemon thread."""
+    class BoomExecutor:
+        def submit(self, *a, **k):
+            return 1
+        def wait_all(self, timeout=300):
+            raise RuntimeError("executor boom")
+        def reset_batch(self):
+            pass
+
+    provider = FakeProvider([
+        LLMResponse(text=None, tool_uses=[
+            ToolCall(id="1", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+        ]),
+    ])
+    agent = LLMAgent(provider=provider, store=FakeStore(), executor=BoomExecutor(),
+                     max_turns=5, max_tools_per_turn=5)
+    bus = FakeBus()
+    report = agent.run("s1", "hi", bus=bus)
+    assert "executor boom" in report["report"]
+    assert report.get("error") == "executor boom"
+    assert any(ev.get("type") == "error" and "executor boom" in ev.get("error", "") for ev in bus.events)

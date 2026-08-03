@@ -126,19 +126,27 @@ class LLMAgent:
     def run(self, session_id: str, user_message: str, goal: str | None = None,
             bus: EventBus | None = None) -> dict:
         system = build_system_prompt(goal or user_message)
-        # messages: user goal first, then alternating tool_use/tool_result as the loop runs.
+        # messages: user goal first, then alternating assistant tool_calls / user
+        # tool_results as the loop runs. These are PROVIDER-NEUTRAL shapes; each
+        # LLMProvider translates them to its own wire format inside complete().
         messages = [{"role": "user", "content": user_message}]
         final_text = ""
         for turn in range(self.max_turns):
             if bus:
                 bus.publish(session_id, {"type": "turn", "turn": turn + 1})
-            resp = self.provider.complete(system=system, messages=messages, tools=TOOLS)
+            # Hydrate BEFORE tool execution so strategies registered in previous
+            # turns resolve deterministically when run_backtest submits a job.
+            self._hydrate_manager()
+            try:
+                resp = self.provider.complete(system=system, messages=messages, tools=TOOLS)
+            except Exception as e:  # noqa: BLE001 - bad key / down proxy -> surface to user
+                if bus:
+                    bus.publish(session_id, {"type": "error", "error": str(e)})
+                return {"session_id": session_id, "report": f"出错了: {e}", "turns": turn + 1, "error": str(e)}
             if resp.text:
                 final_text = resp.text
             if not resp.tool_uses:
                 break  # LLM done (report)
-            # hydrate before tool execution so run_backtest(strategy_ref=<draft name>) resolves
-            self._hydrate_manager()
             # execute tools (bounded concurrency), collect tool_results
             tool_results = []
             for tc in resp.tool_uses[: self.max_tools_per_turn]:
@@ -156,6 +164,10 @@ class LLMAgent:
                     })
                     if bus:
                         bus.publish(session_id, {"type": "tool_error", "name": tc.name, "error": str(e)})
+            # Hydrate AFTER tool execution and BEFORE wait_all: a strategy
+            # registered in THIS turn (register_strategy) must resolve when its
+            # run_backtest jobs hit the executor's worker threads.
+            self._hydrate_manager()
             # backtests submitted this turn: wait for the batch, attach results.
             # The summary+state snapshot is emitted as a separate plain-text user
             # message AFTER the tool_results user message, not as an extra tool_result
@@ -165,15 +177,20 @@ class LLMAgent:
             # combined into a single turn by the API.
             state_text = None
             if any(tc.name == "run_backtest" for tc in resp.tool_uses):
-                results = self.executor.wait_all(timeout=300)
+                try:
+                    results = self.executor.wait_all(timeout=300)
+                except Exception as e:  # noqa: BLE001 - executor failure -> surface to user
+                    if bus:
+                        bus.publish(session_id, {"type": "error", "error": str(e)})
+                    return {"session_id": session_id, "report": f"出错了: {e}", "turns": turn + 1, "error": str(e)}
                 self.executor.reset_batch()
                 snapshot = _build_state_snapshot(self._ctx, goal or user_message)
                 backtest_summary = "\n".join(_result_to_text(r) for r in results)
                 state_text = f"回测结果汇总：\n{backtest_summary}\n当前状态：{json.dumps(snapshot, ensure_ascii=False)}"
                 if bus:
                     bus.publish(session_id, {"type": "backtest_results", "results": results})
-            messages.append({"role": "assistant", "content": [{"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input} for tc in resp.tool_uses]})
-            messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tr["tool_use_id"], "content": tr["content"], "is_error": tr["is_error"]} for tr in tool_results]})
+            messages.append({"role": "assistant", "tool_calls": [{"id": tc.id, "name": tc.name, "input": tc.input} for tc in resp.tool_uses]})
+            messages.append({"role": "user", "tool_results": [{"tool_use_id": tr["tool_use_id"], "content": tr["content"], "is_error": tr["is_error"]} for tr in tool_results]})
             if state_text is not None:
                 messages.append({"role": "user", "content": state_text})
         if bus:

@@ -179,7 +179,11 @@ let chatES = null;
 function chatAppend(role, text) {
   const d = document.createElement('div');
   d.style.margin = '4px 0';
-  d.innerHTML = `<b>${role}:</b> ${text}`;
+  const b = document.createElement('b');
+  b.textContent = `${role}:`;
+  d.appendChild(b);
+  d.appendChild(document.createTextNode(' '));
+  d.appendChild(document.createTextNode(text));
   chatLog.appendChild(d);
   chatLog.scrollTop = chatLog.scrollHeight;
 }
@@ -203,6 +207,7 @@ function chatConnect(sessionId) {
     else if (ev.type === 'tool') { chatAppend('系统', `调用 ${ev.name}`); }
     else if (ev.type === 'tool_error') { chatAppend('系统', `⚠ ${ev.name}: ${ev.error}`); }
     else if (ev.type === 'backtest_results') { chatAppend('系统', '✅ 回测结果已返回'); }
+    else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); }
     else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); }
   };
   chatES.onerror = () => { chatStatus.textContent = '连接中断，重连中…'; };

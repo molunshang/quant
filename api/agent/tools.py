@@ -78,6 +78,9 @@ def publish_strategy(input_: dict, ctx: AgentToolContext) -> str:
     return _json(rec)
 
 
+_DRAWDOWN_KEYS = ("max_drawdown",)
+
+
 def check_goal(input_: dict, ctx: AgentToolContext) -> str:
     """LLM supplies metrics + constraints; code verifies each constraint."""
     metrics = input_.get("metrics", {})
@@ -88,12 +91,20 @@ def check_goal(input_: dict, ctx: AgentToolContext) -> str:
         if val is None:
             unmet.append(f"{key}: missing")
             continue
-        # constraints are lower bounds (min target) unless negative (max drawdown).
-        if isinstance(threshold, (int, float)):
+        if not isinstance(threshold, (int, float)):
+            unmet.append(f"{key}: bad threshold")
+            continue
+        if key in _DRAWDOWN_KEYS:
+            # max_drawdown is a loss metric: a smaller magnitude is better. A
+            # strategy meets its drawdown limit when |val| <= |threshold|, so a
+            # positive threshold (e.g. 0.15) means the same limit as -0.15.
+            if not abs(float(val)) <= abs(float(threshold)):
+                unmet.append(f"{key}: |{val}| > |{threshold}|")
+        else:
+            # return-style metrics (total_return, annual_return, sharpe,
+            # win_rate): bigger is better (lower-bound constraint).
             if not float(val) >= float(threshold):
                 unmet.append(f"{key}: {val} < {threshold}")
-        else:
-            unmet.append(f"{key}: bad threshold")
     met = not unmet
     return _json({"met": met, "unmet": unmet, "metrics": metrics})
 
@@ -162,12 +173,12 @@ TOOLS: list[dict] = [
     },
     {
         "name": "check_goal",
-        "description": "Verify whether backtest metrics meet the user's goal constraints. Pass the metrics from the backtest result and the goal constraints (lower bounds). Returns met: true/false.",
+        "description": "Verify whether backtest metrics meet the user's goal constraints. Pass the metrics from the backtest result and the goal constraints. Return-style metrics (total_return, annual_return, sharpe, win_rate) are lower bounds (meet when >= threshold); max_drawdown is compared by magnitude (meet when |max_drawdown| <= |threshold|). Returns met: true/false.",
         "parameters": {
             "type": "object",
             "properties": {
                 "metrics": {"type": "object", "description": "Backtest metrics, e.g. {annual_return, total_return, max_drawdown, sharpe}"},
-                "constraints": {"type": "object", "description": "Goal thresholds (lower bounds), e.g. {annual_return: 0.10, max_drawdown: -0.15}"},
+                "constraints": {"type": "object", "description": "Goal thresholds, e.g. {annual_return: 0.10, max_drawdown: -0.15}"},
             },
             "required": ["metrics", "constraints"],
         },

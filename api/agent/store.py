@@ -1,9 +1,11 @@
 """SQLite persistence: strategy drafts/versions/published snapshots + chat history."""
 from __future__ import annotations
 
+import functools
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
@@ -14,10 +16,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _synchronized(method):
+    """Serialize access to the shared sqlite connection via a per-instance lock.
+
+    check_same_thread=False allows cross-thread use, but the connection must be
+    used by one thread at a time; RLock keeps nested public calls (e.g.
+    list_strategies -> get_strategy) from deadlocking.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class StrategyStore:
     def __init__(self, db_path: str | None = None):
         os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
-        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False)
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -55,6 +72,7 @@ class StrategyStore:
         self.conn.commit()
 
     # ---- strategies ----
+    @_synchronized
     def _strategy_id(self, name: str) -> int:
         row = self.conn.execute(
             "SELECT id FROM strategies WHERE name = ?", (name,)
@@ -67,6 +85,7 @@ class StrategyStore:
             return cur.lastrowid
         return row["id"]
 
+    @_synchronized
     def register_draft(self, name: str, source: str, description: str = "") -> dict:
         sid = self._strategy_id(name)
         row = self.conn.execute(
@@ -84,6 +103,7 @@ class StrategyStore:
         self.conn.commit()
         return {"name": name, "version": version, "status": "draft"}
 
+    @_synchronized
     def get_strategy(self, name: str) -> dict | None:
         row = self.conn.execute(
             "SELECT * FROM strategies WHERE name = ?", (name,)
@@ -100,6 +120,7 @@ class StrategyStore:
             "versions": versions,
         }
 
+    @_synchronized
     def list_strategies(self, include_drafts: bool = True) -> list[dict]:
         rows = self.conn.execute(
             "SELECT name, status FROM strategies ORDER BY name"
@@ -116,6 +137,7 @@ class StrategyStore:
             })
         return out
 
+    @_synchronized
     def publish_version(self, name: str, version: int, metrics: dict, goal: str) -> dict:
         sid_row = self.conn.execute(
             "SELECT id FROM strategies WHERE name = ?", (name,)
@@ -141,6 +163,7 @@ class StrategyStore:
         self.conn.commit()
         return {"name": name, "version": version, "status": "published", "metrics": metrics}
 
+    @_synchronized
     def get_source(self, name: str, version: int | None = None) -> str | None:
         """Return the `source` of a strategy version, or the latest version's
         source if `version` is None. Returns None if the strategy or version
@@ -165,6 +188,7 @@ class StrategyStore:
             return None
         return row["source"]
 
+    @_synchronized
     def get_versions(self, name: str) -> list[dict]:
         sid_row = self.conn.execute(
             "SELECT id FROM strategies WHERE name = ?", (name,)
@@ -189,6 +213,7 @@ class StrategyStore:
             for r in rows
         ]
 
+    @_synchronized
     def close(self):
         self.conn.close()
 
@@ -196,7 +221,8 @@ class StrategyStore:
 class ChatStore:
     def __init__(self, db_path: str | None = None):
         os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
-        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False)
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -212,6 +238,7 @@ class ChatStore:
         """)
         self.conn.commit()
 
+    @_synchronized
     def add_message(self, session_id: str, role: str, content: str) -> int:
         cur = self.conn.execute(
             "INSERT INTO chat_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
@@ -220,6 +247,7 @@ class ChatStore:
         self.conn.commit()
         return int(cur.lastrowid)
 
+    @_synchronized
     def list_messages(self, session_id: str) -> list[dict]:
         rows = self.conn.execute(
             "SELECT id, role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY id",
@@ -227,11 +255,13 @@ class ChatStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_synchronized
     def list_sessions(self) -> list[str]:
         rows = self.conn.execute(
             "SELECT DISTINCT session_id FROM chat_messages ORDER BY session_id"
         ).fetchall()
         return [r["session_id"] for r in rows]
 
+    @_synchronized
     def close(self):
         self.conn.close()

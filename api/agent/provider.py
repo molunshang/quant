@@ -49,6 +49,44 @@ def _anthropic_tools(tools: list[dict]) -> list[dict]:
     ]
 
 
+def _anthropic_messages(messages: list[dict]) -> list[dict]:
+    """Translate the provider-neutral message list to Anthropic's wire format.
+
+    Neutral shapes translated here:
+      - {"role": "assistant", "tool_calls": [{"id", "name", "input"}]}
+          -> {"role": "assistant", "content": [{"type": "tool_use", "id", "name", "input"}]}
+      - {"role": "user", "tool_results": [{"tool_use_id", "content", "is_error"}]}
+          -> {"role": "user", "content": [{"type": "tool_result", "tool_use_id", "content", "is_error"}]}
+    Plain-text messages pass through unchanged.
+    """
+    out = []
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            out.append({
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc.get("input", {})}
+                    for tc in m["tool_calls"]
+                ],
+            })
+        elif m.get("role") == "user" and m.get("tool_results"):
+            out.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tr["tool_use_id"],
+                        "content": tr.get("content", ""),
+                        "is_error": tr.get("is_error", False),
+                    }
+                    for tr in m["tool_results"]
+                ],
+            })
+        else:
+            out.append(dict(m))
+    return out
+
+
 class AnthropicProvider(LLMProvider):
     def __init__(self, api_key: str, base_url: str | None = None, model: str = "claude-opus-5"):
         kwargs = {"api_key": api_key}
@@ -62,7 +100,7 @@ class AnthropicProvider(LLMProvider):
             "model": model or self.model,
             "max_tokens": max_tokens,
             "system": system,
-            "messages": messages,
+            "messages": _anthropic_messages(messages),
         }
         if tools:
             kwargs["tools"] = _anthropic_tools(tools)
@@ -90,6 +128,52 @@ def _openai_tools(tools: list[dict]) -> list[dict]:
     ]
 
 
+def _openai_messages(messages: list[dict]) -> list[dict]:
+    """Translate the provider-neutral message list to OpenAI's wire format.
+
+    Neutral shapes translated here:
+      - {"role": "assistant", "tool_calls": [{"id", "name", "input"}]}
+          -> {"role": "assistant", "content": None,
+              "tool_calls": [{"id", "type": "function",
+                              "function": {"name", "arguments": "<json string>"}}]}
+      - {"role": "user", "tool_results": [{"tool_use_id", "content", "is_error"}]}
+          -> one {"role": "tool", "tool_call_id", "content"} message per result
+             ("Error: " prefixed when is_error)
+    Plain-text messages pass through unchanged.
+    """
+    out = []
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            out.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc.get("input", {}), ensure_ascii=False),
+                        },
+                    }
+                    for tc in m["tool_calls"]
+                ],
+            })
+        elif m.get("role") == "user" and m.get("tool_results"):
+            for tr in m["tool_results"]:
+                content = tr.get("content", "")
+                if tr.get("is_error"):
+                    content = f"Error: {content}"
+                out.append({
+                    "role": "tool",
+                    "tool_call_id": tr["tool_use_id"],
+                    "content": content,
+                })
+        else:
+            out.append(dict(m))
+    return out
+
+
 class OpenAICompatProvider(LLMProvider):
     def __init__(self, api_key: str, base_url: str, model: str):
         self._client = OpenAI(api_key=api_key, base_url=base_url)
@@ -99,7 +183,7 @@ class OpenAICompatProvider(LLMProvider):
         msgs: list[dict] = []
         if system:
             msgs.append({"role": "system", "content": system})
-        msgs.extend(messages)
+        msgs.extend(_openai_messages(messages))
         kwargs: dict = {
             "model": model or self.model,
             "messages": msgs,

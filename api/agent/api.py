@@ -38,8 +38,12 @@ def register_agent_routes(app: FastAPI) -> None:
         chat_store.add_message(session_id, "system", f"目标: {goal or message}")
 
         def _run():
-            report = agent.run(session_id, message, goal=goal, bus=bus)
-            chat_store.add_message(session_id, "assistant", report.get("report", ""))
+            try:
+                report = agent.run(session_id, message, goal=goal, bus=bus)
+                chat_store.add_message(session_id, "assistant", report.get("report", ""))
+            except Exception as e:  # noqa: BLE001 - surface errors to the user, no eternal spinner
+                bus.publish(session_id, {"type": "error", "error": str(e)})
+                chat_store.add_message(session_id, "assistant", f"出错了: {e}")
 
         threading.Thread(target=_run, daemon=True).start()
         return {"session_id": session_id}

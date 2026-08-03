@@ -66,6 +66,44 @@ def test_check_goal_not_met():
     assert out["met"] is False
 
 
+def test_check_goal_drawdown_exceeds_limit():
+    # I3: max_drawdown compared by magnitude — |val| > |threshold| means NOT met.
+    out = json.loads(check_goal(
+        {"metrics": {"max_drawdown": -0.20},
+         "constraints": {"max_drawdown": -0.15}},
+        None,
+    ))
+    assert out["met"] is False
+    assert any("max_drawdown" in u for u in out["unmet"])
+
+
+def test_check_goal_drawdown_within_limit():
+    # I3: |val| <= |threshold| means met.
+    out = json.loads(check_goal(
+        {"metrics": {"max_drawdown": -0.10},
+         "constraints": {"max_drawdown": -0.15}},
+        None,
+    ))
+    assert out["met"] is True
+
+
+def test_check_goal_drawdown_positive_threshold_deterministic():
+    # I3: a positive threshold (e.g. 0.15) means the same limit as -0.15:
+    # met iff |max_drawdown| <= 0.15.
+    met = json.loads(check_goal(
+        {"metrics": {"max_drawdown": -0.10},
+         "constraints": {"max_drawdown": 0.15}},
+        None,
+    ))
+    assert met["met"] is True
+    not_met = json.loads(check_goal(
+        {"metrics": {"max_drawdown": -0.20},
+         "constraints": {"max_drawdown": 0.15}},
+        None,
+    ))
+    assert not_met["met"] is False
+
+
 def test_publish_requires_goal_met(tmp_path):
     c = _ctx(tmp_path)
     register_strategy({"name": "ma", "source": "def strategy(ctx, p):\n    pass"}, c)
