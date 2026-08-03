@@ -117,7 +117,12 @@ class StrategyStore:
         return out
 
     def publish_version(self, name: str, version: int, metrics: dict, goal: str) -> dict:
-        sid = self._strategy_id(name)
+        sid_row = self.conn.execute(
+            "SELECT id FROM strategies WHERE name = ?", (name,)
+        ).fetchone()
+        if sid_row is None:
+            raise KeyError(f"strategy {name!r} has no version {version}")
+        sid = sid_row["id"]
         row = self.conn.execute(
             "SELECT id FROM strategy_versions WHERE strategy_id = ? AND version = ?",
             (sid, version),

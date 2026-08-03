@@ -32,6 +32,7 @@ def test_publish_unknown_strategy_raises(tmp_path):
     s = StrategyStore(db_path=str(tmp_path / "t.db"))
     with pytest.raises(KeyError):
         s.publish_version("nope", 1, {}, "")
+    assert s.get_strategy("nope") is None
     s.close()
 
 
