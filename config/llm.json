@@ -1,0 +1,6 @@
+{
+  "providers": [
+    {"name": "anthropic-local", "type": "anthropic",
+     "base_url": "http://127.0.0.1:3456", "model": "opengo/deepseek-v4-flash", "api_key": "env:ANTHROPIC_API_KEY"}
+  ]
+}
