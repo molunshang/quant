@@ -26,13 +26,65 @@ def test_load_good_strategy():
 
 
 def test_reject_import():
-    with pytest.raises(ValueError, match="import"):
+    with pytest.raises(ValueError, match="math, numpy, pandas"):
         validate_strategy_source("import os\ndef strategy(ctx, params):\n    pass")
 
 
 def test_reject_from_import():
-    with pytest.raises(ValueError, match="import"):
+    with pytest.raises(ValueError, match="math, numpy, pandas"):
         validate_strategy_source("from os import path\ndef strategy(ctx, params):\n    pass")
+
+
+def test_allow_math_import():
+    src = "import math\ndef strategy(ctx, params):\n    return math.sqrt(2)"
+    assert callable(load_strategy_from_source(src))
+
+
+def test_allow_math_from_import():
+    src = "from math import sqrt\ndef strategy(ctx, params):\n    return sqrt(2)"
+    assert callable(load_strategy_from_source(src))
+
+
+def test_allow_numpy_pandas_import():
+    src = ("import numpy as np\nimport pandas as pd\n"
+           "def strategy(ctx, params):\n"
+           "    return np.mean(ctx.bars_upto()['close'])")
+    assert callable(load_strategy_from_source(src))
+
+
+def test_reject_import_from_engine():
+    with pytest.raises(ValueError, match="math, numpy, pandas"):
+        validate_strategy_source("from engine.context import Context\ndef strategy(ctx, params):\n    pass")
+
+
+def test_injected_helpers_run_in_engine():
+    """User source can call pre-injected sma/ema/rsi/macd and import math/numpy,
+    and still run end-to-end through the engine."""
+    src = (
+        "import math\n"
+        "import numpy as np\n"
+        "def strategy(ctx, params):\n"
+        "    closes = ctx.bars_upto()['close'].astype(float)\n"
+        "    ma = sma(closes, params.get('short', 20))\n"
+        "    r = rsi(closes, 14)\n"
+        "    if len(closes) < 30:\n"
+        "        return\n"
+        "    size = int(math.floor(ctx.cash / ctx.price / 100)) * 100\n"
+        "    if ctx.shares == 0 and np.isfinite(ma.iloc[-1]) and size > 0:\n"
+        "        ctx.buy(size)\n"
+        "    elif r.iloc[-1] > 90 and ctx.shares > 0:\n"
+        "        ctx.sell()\n"
+    )
+    func = load_strategy_from_source(src)
+    import pandas as pd
+    bars = pd.DataFrame({
+        "date": pd.date_range("2023-01-02", periods=80, freq="B").strftime("%Y-%m-%d"),
+        "open": [100.0] * 80, "high": [101.0] * 80, "low": [99.0] * 80,
+        "close": [100.0] * 80, "volume": [10000] * 80,
+    })
+    from engine.engine import BacktestEngine, EngineConfig
+    result = BacktestEngine(EngineConfig(initial_cash=100_000)).run(func, bars, params={"short": 20})
+    assert result.metrics["n_trades"] >= 1
 
 
 def test_reject_missing_strategy_func():

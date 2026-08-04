@@ -112,7 +112,7 @@ def check_goal(input_: dict, ctx: AgentToolContext) -> str:
 TOOLS: list[dict] = [
     {
         "name": "list_symbols",
-        "description": "List tradable symbols (stocks/funds/ETFs). Optional type ('stock'|'etf'|'fund') and keyword filter. Use to choose which symbol(s) to backtest.",
+        "description": "List tradable symbols (stocks/funds/ETFs). Optional type ('stock'|'etf'|'fund') and keyword filter. Use to choose which symbol(s) to backtest. Returns up to 20 matches, each {code, name, type}.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -123,17 +123,17 @@ TOOLS: list[dict] = [
     },
     {
         "name": "run_backtest",
-        "description": "Submit a backtest job asynchronously. Returns a job_id. Submit multiple in one turn to run in parallel; the agent waits for all to finish before continuing. strategy_ref is a strategy NAME (the current draft) — call register_strategy first to create/update the draft.",
+        "description": "Submit a backtest job asynchronously. Returns {job_id, status, symbol}. Submit multiple in one turn to run in parallel; the agent waits for all to finish before continuing. strategy_ref is a strategy NAME (the current draft) — call register_strategy first to create/update the draft.",
         "parameters": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "Symbol code, e.g. 510300"},
-                "strategy_ref": {"type": "string", "description": "Strategy name (current draft)"},
-                "params": {"type": "object", "description": "Strategy parameters (JSON)"},
-                "freq": {"type": "string", "enum": ["daily", "1", "5", "15", "30", "60"], "description": "Bar frequency"},
+                "strategy_ref": {"type": "string", "description": "Strategy name (registered draft). Omit to use the default buy_and_hold."},
+                "params": {"type": "object", "description": "Strategy parameters passed through to strategy(ctx, params), e.g. {\"short\": 20}."},
+                "freq": {"type": "string", "enum": ["daily", "1", "5", "15", "30", "60"], "description": "Bar frequency: 'daily' for daily bars, or a minute interval in minutes ('1'|'5'|'15'|'30'|'60')."},
                 "start": {"type": "string", "description": "Start date YYYY-MM-DD"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
-                "adjust": {"type": "string", "enum": ["qfq", "hfq", "none"]},
+                "adjust": {"type": "string", "enum": ["qfq", "hfq", "none"], "description": "Price adjustment: 'qfq' forward-adjusted (default), 'hfq' backward-adjusted, 'none' raw."},
             },
             "required": ["symbol"],
         },
@@ -144,16 +144,16 @@ TOOLS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Strategy name"},
-                "source": {"type": "string", "description": "Python source defining strategy(ctx, params)"},
-                "description": {"type": "string", "description": "Human description"},
+                "name": {"type": "string", "description": "Strategy name (draft identifier). Registering an existing name updates that draft."},
+                "source": {"type": "string", "description": "Python source defining `def strategy(ctx, params)`, called once per bar. ctx provides: ctx.price/open/high/low/volume (current bar), ctx.position/ctx.shares/ctx.cash, ctx.bars_upto(lookback) for historical bars. Trade via ctx.buy(shares, price) / ctx.sell(shares, price) (both return bool; price defaults to close, shares defaults to all-in / full position). params is the run_backtest params dict. Engine enforces A-share rules (T+1, price limit, 100-share lots). Indicator helpers sma/ema/rsi/macd are pre-injected (call directly, no import); math/numpy/pandas may be imported as math/np/pandas."},
+                "description": {"type": "string", "description": "Optional human-readable summary of the strategy's logic."},
             },
             "required": ["name", "source"],
         },
     },
     {
         "name": "list_strategies",
-        "description": "List registered strategies (drafts + published) with current version.",
+        "description": "List registered strategies (drafts + published), each {name, status, current_version}. Use to confirm a draft name before running a backtest.",
         "parameters": {"type": "object", "properties": {}},
     },
     {
@@ -162,11 +162,11 @@ TOOLS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {"type": "string"},
+                "name": {"type": "string", "description": "Registered strategy name (the draft to publish)"},
                 "version": {"type": "integer", "description": "Optional; defaults to current draft version"},
                 "goal_met": {"type": "boolean", "description": "Must be true to publish"},
-                "metrics": {"type": "object", "description": "Metrics snapshot at publish time"},
-                "goal": {"type": "string", "description": "The goal that was met"},
+                "metrics": {"type": "object", "description": "Metrics snapshot at publish time, e.g. the backtest metrics that met the goal"},
+                "goal": {"type": "string", "description": "The user goal this version satisfies (recorded for the report)"},
             },
             "required": ["name", "goal_met"],
         },

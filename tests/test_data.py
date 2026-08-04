@@ -52,3 +52,34 @@ def test_sources_present():
     dl = DataLayer()
     assert any(isinstance(s, EastMoneySource) for s in dl.sources)
     assert any(isinstance(s, SinaSource) for s in dl.sources)
+
+
+def test_sina_source_forwards_adjust(monkeypatch):
+    """SinaSource must forward hfq/qfq to akshare and not silently downgrade
+    hfq to unadjusted data (the old 'qfq'/'1' alias stripped hfq -> None)."""
+    import akshare as ak
+
+    calls = []
+    def fake_daily(symbol, start_date, end_date, adjust):
+        calls.append((symbol, start_date, end_date, adjust))
+        return pd.DataFrame({
+            "date": ["2024-01-02"], "open": [10.0], "high": [11.0],
+            "low": [9.0], "close": [10.5], "volume": [1000],
+        })
+
+    monkeypatch.setattr(ak, "stock_zh_a_daily", fake_daily)
+
+    src = SinaSource()
+    info = type("SI", (), {"type": "stock", "code": "600519", "exchange": "sh", "name": "x"})()
+
+    for requested, expected in [("hfq", "hfq"), ("qfq", "qfq"), ("none", ""), ("", "")]:
+        calls.clear()
+        src.fetch_daily(info, "2024-01-01", "2024-01-05", requested)
+        assert calls and calls[0][3] == expected, \
+            f"adjust={requested!r} should reach akshare as {expected!r}, got {calls[0][3] if calls else None}"
+
+    # the legacy "1" alias must not be treated as qfq
+    calls.clear()
+    src.fetch_daily(info, "2024-01-01", "2024-01-05", "1")
+    assert calls and calls[0][3] == "", \
+        f"legacy '1' should reach akshare as raw, got {calls[0][3] if calls else None}"

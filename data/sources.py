@@ -140,7 +140,7 @@ class SinaSource(DataSource):
     def fetch_daily(self, symbol: SymbolInfo, start: str, end: str, adjust: str = "qfq") -> pd.DataFrame:
         import akshare as ak
 
-        adj = "qfq" if adjust in ("qfq", "1") else None
+        adj = {"qfq": "qfq", "hfq": "hfq", "none": ""}.get(adjust, "")
         # ETFs & indices use the index-daily endpoint; stocks use stock-daily.
         if symbol.type in ("etf", "index"):
             df = ak.stock_zh_index_daily(symbol=self._prefixed(symbol))
