@@ -294,3 +294,18 @@ def test_add_provider_with_unset_env_degrades_gracefully(tmp_path):
     assert [p["name"] for p in data["providers"]] == ["p1"]
     assert "解析失败" in (data["error"] or "")
     assert store.providers() == {}
+
+
+def test_add_anthropic_non_string_base_url_rejected(tmp_path):
+    store = ProviderConfigStore(str(_cfg(tmp_path)))
+    with pytest.raises(ConfigError, match="base_url"):
+        store.add({"name": "p1", "type": "anthropic", "base_url": 123, "model": "m", "api_key": "k"})
+
+
+def test_build_sets_short_timeout(tmp_path):
+    store = ProviderConfigStore(str(_cfg(tmp_path)))
+    a = store._build({"name": "p", "type": "anthropic", "model": "m", "api_key": "k"})
+    assert a._client.timeout == 10.0
+    o = store._build({"name": "p", "type": "openai_compat", "base_url": "http://127.0.0.1:1",
+                      "model": "m", "api_key": "k"})
+    assert o._client.timeout == 10.0

@@ -107,6 +107,9 @@ class ProviderConfigStore:
             raise ConfigError("openai_compat 类型必须填写 base_url")
         if typ == "openai_compat" and not base_url.startswith(("http://", "https://")):
             raise ConfigError("base_url 必须以 http:// 或 https:// 开头")
+        if typ == "anthropic" and base_url:
+            if not isinstance(base_url, str) or not base_url.strip():
+                raise ConfigError("base_url 必须是字符串")
 
     # ---- mutations (each validates, writes, reloads) ----
     def add(self, p: dict) -> dict:
@@ -181,8 +184,12 @@ class ProviderConfigStore:
         api_key = _expand_env(p.get("api_key", ""))
         model = p.get("model", "claude-opus-5")
         if typ == "anthropic":
-            return AnthropicProvider(api_key=api_key, base_url=p.get("base_url"), model=model)
-        return OpenAICompatProvider(api_key=api_key, base_url=p["base_url"], model=model)
+            provider = AnthropicProvider(api_key=api_key, base_url=p.get("base_url"), model=model)
+        else:
+            provider = OpenAICompatProvider(api_key=api_key, base_url=p["base_url"], model=model)
+        # test-connection only: don't hang ~10 min on an unroutable host
+        provider._client.timeout = 10.0
+        return provider
 
     def _ping(self, provider) -> None:
         provider.complete(

@@ -227,6 +227,11 @@ let editingLlm = null;
 
 async function loadLlmProviders() {
   const r = await fetch('/api/llm/providers/list');
+  if (!r.ok) {
+    const err = await r.json();
+    $('llmProviderList').textContent = '⚠ ' + (err.detail || '加载失败');
+    return;
+  }
   const data = await r.json();
   const list = $('llmProviderList');
   list.innerHTML = '';
