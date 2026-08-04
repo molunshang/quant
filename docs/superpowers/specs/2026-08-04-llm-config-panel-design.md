@@ -74,6 +74,12 @@ ProviderConfigStore
 
 - 写端点：校验失败 → `400` + 中文 `detail`；成功 → 返回最新列表。
 - **测试连接**：端点**无状态**——body 传完整 provider 配置（`name/type/base_url/model/api_key`），既测已保存的行，也测表单里未保存的草稿。用该配置发极小真实请求（`max_tokens` 尽量小），成功回 `{ok: true}`，失败回 `{ok: false, error}`。`env:` 引用先展开再调用，可测出「环境变量未设/填错」。
+
+  失败时 **`error` 必须包含可定位的错误原因**，具体做到：
+  - `env:` 引用的环境变量未设置 → `error` 明确写「环境变量 XXX 未设置」。
+  - HTTP/网络层错误（连接拒绝、超时、404/401/403 等非 2xx、DNS 失败）→ 透出底层异常消息，如 `Connection refused`、`401 Unauthorized`、`Timeout`，并附上**实际请求的 base_url**，方便核对填写的 URL 是否正确。
+  - 模型不可用（400 提示 model 不存在）→ 透出 API 返回的错误正文。
+  - 任何分支都不返回模糊的「连接失败」，必须让用户能从 error 字符串直接定位是「环境变量、URL、key、还是 model」出了问题。
 - **写后即生效**：`add/update/delete/default-set` 成功后内存 provider 表立即重建，聊天/测试连接立即用新配置，无需重启。
 - **聊天 provider 解析顺序**：`/api/chat` 请求体显式 `provider` → `default` 配置 → 第一个 provider（与现有行为兼容）。
 
@@ -103,4 +109,7 @@ ProviderConfigStore
   - `env:` 展开；无 default 时回退到第一个 provider。
 - **API 测试**（TestClient）：`list/add/update/delete/test/default-set` 端点状态码与返回体。
 - **重载生效测试**：写一个 provider 后，`store.providers()` 立即反映新配置（无需重启）。
-- **测试连接**：mock provider 层，不真发网络请求。
+- **测试连接**：mock provider 层，不真发网络请求。覆盖：
+  - 成功 → `{ok: true}`。
+  - `env:` 未设置 → error 含「环境变量 XXX 未设置」。
+  - 连接被拒/401/超时 → error 含底层异常消息与 base_url。
