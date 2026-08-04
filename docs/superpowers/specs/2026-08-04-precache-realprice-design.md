@@ -94,9 +94,8 @@ tests/                  因子计算 / 旧格式重下 / 除权日调整 / 增�
 
 **`BacktestEngine.run()`**：
 - 加载 `bars["factor"]`，识别除权日（`factor` 逐日比值 ≠ 1 的日子）；
-- 每日开盘前：若当日是除权日，按因子调整持仓——
-  - `factor` 比值 > 1（送股/拆股）：`position *= 比值`，`avg_cost /= 比值`；
-  - `factor` 比值 < 1（分红/配股）：等价现金资金流，调整成本（具体公式见实现计划）；
+- 每日开盘前：若当日是除权日，**全按拆股处理**——`position *= 比值`，`avg_cost /= 比值`。
+- **重要**：`factor = qfq/raw` 以最新价为锚，**拆股与现金分红都会使 `factor` 比值 > 1**，单凭 `factor` 无法区分二者。选「全按拆股处理」意味着：现金分红日也会按同样规则调整股数（total-return 近似，市值连续、总收益正确）。用户已确认此近似可接受。
 - 成交用真实价；涨跌停判断 `_is_limit_up/down` 用真实价（比 qfq 价更准）；
 - 权益曲线 `equity = cash + position * close`（真实价 × 股数 = 真实市值）。
 
@@ -145,7 +144,7 @@ tests/                  因子计算 / 旧格式重下 / 除权日调整 / 增�
   - `PrecacheManager.submit/get/list` 状态流转；
   - 增量刷新只补新交易日（去重合并正确）；
   - API 端点（submit/query/refresh）状态与响应；
-  - 除权日持仓调整（送股/拆股/分红三种情形）。
+  - 除权日持仓调整（ratio>1 拆股情形；含取整到 lot、成本折算）。
 
 ## 约束与风险
 
@@ -153,4 +152,5 @@ tests/                  因子计算 / 旧格式重下 / 除权日调整 / 增�
 2. **预缓存仅对 eastmoney 可达的标的有意义**：降级路径下缓存仍可用（真实价），但无因子，引擎以 `factor=1` 处理（等价于 `none` 模式）。
 3. **分钟线**：保持 qfq 现状，不在本次范围。**`adjust` 收敛仅作用于日线**——分钟线缓存键仍含 `adjust="qfq"`，直接存 eastmoney 返回的 qfq 价（`factor` 列恒为 1，引擎按无除权处理）。TODO：分钟线因子获取（数据源不提供，需另想办法）后统一。
 4. **`hfq` deprecated**：现有调用方传 `hfq` 会得到 qfq 行为。需在文档/API 层标明，避免误解。
+5. **除权日全按拆股处理（total-return 近似）**：`factor = qfq/raw` 以最新价为锚，拆股与现金分红都使 `ratio > 1`，单凭 factor 无法区分。统一 `position *= ratio`、`avg_cost /= ratio`，市值连续、总收益正确。现金分红日会多算股本（近似），用户已确认接受。若未来要精确处理现金分红，需引入 `stock_zh_a_dividend_cninfo` 分红明细（本次不做）。
 5. **factor 数值稳定性**：`qfq_close / none_close` 在成交量接近 0 或价格为 0 的日子可能不稳定，需加保护（如除数为 0 时用前值）。
