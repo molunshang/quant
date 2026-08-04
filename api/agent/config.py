@@ -86,3 +86,72 @@ class ProviderConfigStore:
     def providers(self) -> dict[str, object]:
         with self._lock:
             return dict(self._providers)
+
+    # ---- validation ----
+    def _validate(self, p: dict, existing: set[str]) -> None:
+        name = p.get("name", "")
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError("名称不能为空")
+        if name in existing:
+            raise ConfigError(f"provider 名称已存在: {name}")
+        typ = p.get("type")
+        if typ not in VALID_TYPES:
+            raise ConfigError(f"类型必须为 {'/'.join(VALID_TYPES)}，当前: {typ}")
+        if not isinstance(p.get("model"), str) or not p["model"].strip():
+            raise ConfigError("模型名称不能为空")
+        api_key = p.get("api_key", "")
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise ConfigError("API Key 不能为空")
+        base_url = p.get("base_url", "")
+        if typ == "openai_compat" and not (isinstance(base_url, str) and base_url.strip()):
+            raise ConfigError("openai_compat 类型必须填写 base_url")
+        if typ == "openai_compat" and not base_url.startswith(("http://", "https://")):
+            raise ConfigError("base_url 必须以 http:// 或 https:// 开头")
+
+    # ---- mutations (each validates, writes, reloads) ----
+    def add(self, p: dict) -> dict:
+        with self._lock:
+            cfg = self._read()
+            self._validate(p, {x["name"] for x in cfg["providers"]})
+            cfg["providers"].append(p)
+            self._write(cfg)
+            self._reload()
+            return self.list()
+
+    def update(self, name: str, p: dict) -> dict:
+        with self._lock:
+            cfg = self._read()
+            names = [x["name"] for x in cfg["providers"]]
+            if name not in names:
+                raise ConfigError(f"provider 不存在: {name}")
+            p = dict(p)
+            p["name"] = name  # name is identity, not editable
+            existing = set(names) - {name}
+            self._validate(p, existing)
+            cfg["providers"] = [p if x["name"] == name else x for x in cfg["providers"]]
+            self._write(cfg)
+            self._reload()
+            return self.list()
+
+    def delete(self, name: str) -> dict:
+        with self._lock:
+            cfg = self._read()
+            kept = [x for x in cfg["providers"] if x["name"] != name]
+            if len(kept) == len(cfg["providers"]):
+                raise ConfigError(f"provider 不存在: {name}")
+            cfg["providers"] = kept
+            if cfg.get("default") == name:
+                cfg["default"] = None
+            self._write(cfg)
+            self._reload()
+            return self.list()
+
+    def set_default(self, name: str) -> dict:
+        with self._lock:
+            cfg = self._read()
+            if not any(x["name"] == name for x in cfg["providers"]):
+                raise ConfigError(f"provider 不存在: {name}")
+            cfg["default"] = name
+            self._write(cfg)
+            self._reload()
+            return self.list()
