@@ -136,3 +136,60 @@ def test_set_default_unknown_rejected(tmp_path):
     store = ProviderConfigStore(str(_cfg(tmp_path)))
     with pytest.raises(ConfigError, match="不存在"):
         store.set_default("nope")
+
+
+class _FakeProvider:
+    def __init__(self, exc=None):
+        self.exc = exc
+        self.called = False
+
+    def complete(self, **kwargs):
+        self.called = True
+        if self.exc:
+            raise self.exc
+        from api.agent.provider import LLMResponse
+        return LLMResponse(text="pong")
+
+
+class _StatusError(Exception):
+    def __init__(self, status_code, msg):
+        super().__init__(msg)
+        self.status_code = status_code
+
+
+def _store_with_fake_build(monkeypatch, tmp_path, exc=None):
+    store = ProviderConfigStore(str(_cfg(tmp_path)))
+    fake = _FakeProvider(exc)
+    monkeypatch.setattr(store, "_build", lambda p: fake)
+    return store, fake
+
+
+def test_test_connection_ok(monkeypatch, tmp_path):
+    store, fake = _store_with_fake_build(monkeypatch, tmp_path)
+    res = store.test({"name": "p", "type": "anthropic", "model": "m", "api_key": "k"})
+    assert res["ok"] is True
+    assert res["error"] is None
+    assert fake.called
+
+
+def test_test_env_missing(tmp_path):
+    store = ProviderConfigStore(str(_cfg(tmp_path)))
+    res = store.test({"name": "p", "type": "anthropic", "model": "m", "api_key": "env:NOT_SET_XYZ"})
+    assert res["ok"] is False
+    assert "NOT_SET_XYZ" in res["error"]
+
+
+def test_test_error_includes_base_url_and_detail(monkeypatch, tmp_path):
+    store, _ = _store_with_fake_build(monkeypatch, tmp_path, exc=ConnectionError("Connection refused"))
+    res = store.test({"name": "p", "type": "openai_compat", "base_url": "http://127.0.0.1:9",
+                      "model": "m", "api_key": "k"})
+    assert res["ok"] is False
+    assert "http://127.0.0.1:9" in res["error"]
+    assert "Connection refused" in res["error"]
+
+
+def test_test_error_includes_http_status(monkeypatch, tmp_path):
+    store, _ = _store_with_fake_build(monkeypatch, tmp_path, exc=_StatusError(401, "Unauthorized"))
+    res = store.test({"name": "p", "type": "anthropic", "model": "m", "api_key": "k"})
+    assert res["ok"] is False
+    assert "401" in res["error"]

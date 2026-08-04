@@ -155,3 +155,39 @@ class ProviderConfigStore:
             self._write(cfg)
             self._reload()
             return self.list()
+
+    # ---- test connectivity ----
+    def test(self, p: dict) -> dict:
+        api_key = p.get("api_key", "")
+        if isinstance(api_key, str) and api_key.startswith("env:"):
+            var = api_key[4:]
+            if not os.environ.get(var):
+                return {"ok": False, "error": f"环境变量 {var} 未设置"}
+        try:
+            self._validate(dict(p, name=p.get("name") or "_test"), set())
+        except ConfigError as e:
+            return {"ok": False, "error": str(e)}
+        base_url = p.get("base_url") or "(使用默认地址)"
+        try:
+            self._ping(self._build(p))
+        except Exception as e:  # noqa: BLE001 - surface underlying error for diagnosis
+            status = getattr(e, "status_code", None)
+            detail = f"HTTP {status}: {e}" if status else (str(e) or type(e).__name__)
+            return {"ok": False, "error": f"{base_url} → {detail}"}
+        return {"ok": True, "error": None}
+
+    def _build(self, p: dict):
+        typ = p["type"]
+        api_key = _expand_env(p.get("api_key", ""))
+        model = p.get("model", "claude-opus-5")
+        if typ == "anthropic":
+            return AnthropicProvider(api_key=api_key, base_url=p.get("base_url"), model=model)
+        return OpenAICompatProvider(api_key=api_key, base_url=p["base_url"], model=model)
+
+    def _ping(self, provider) -> None:
+        provider.complete(
+            system="ping",
+            messages=[{"role": "user", "content": "ping"}],
+            tools=[],
+            max_tokens=1,
+        )
