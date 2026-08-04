@@ -193,3 +193,93 @@ def test_test_error_includes_http_status(monkeypatch, tmp_path):
     res = store.test({"name": "p", "type": "anthropic", "model": "m", "api_key": "k"})
     assert res["ok"] is False
     assert "401" in res["error"]
+
+
+def _make_client(tmp_path, monkeypatch):
+    import os
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from api.agent.api import register_agent_routes
+
+    cfg_path = tmp_path / "llm.json"
+    cfg_path.write_text('{"providers": []}', encoding="utf-8")
+    monkeypatch.setenv("QUANT_LLM_CONFIG", str(cfg_path))
+    app = FastAPI()
+    register_agent_routes(app)
+    return TestClient(app), cfg_path
+
+
+def test_api_list_empty(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    r = client.get("/api/llm/providers/list")
+    assert r.status_code == 200
+    assert r.json()["providers"] == []
+
+
+def test_api_add_and_list(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    body = {"name": "p1", "type": "openai_compat", "base_url": "http://127.0.0.1:3456",
+            "model": "m1", "api_key": "k"}
+    r = client.post("/api/llm/providers/add", json=body)
+    assert r.status_code == 200
+    assert [p["name"] for p in r.json()["providers"]] == ["p1"]
+    r2 = client.get("/api/llm/providers/list")
+    assert [p["name"] for p in r2.json()["providers"]] == ["p1"]
+
+
+def test_api_add_invalid_returns_400(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    r = client.post("/api/llm/providers/add",
+                    json={"name": "", "type": "anthropic", "model": "m", "api_key": "k"})
+    assert r.status_code == 400
+    assert "名称" in r.json()["detail"]
+
+
+def test_api_update(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    client.post("/api/llm/providers/add", json={"name": "p1", "type": "openai_compat",
+                "base_url": "http://x", "model": "m1", "api_key": "k"})
+    r = client.post("/api/llm/providers/update", json={"name": "p1", "type": "openai_compat",
+                    "base_url": "http://x", "model": "m2", "api_key": "k"})
+    assert r.status_code == 200
+    p1 = next(p for p in r.json()["providers"] if p["name"] == "p1")
+    assert p1["model"] == "m2"
+
+
+def test_api_delete(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    client.post("/api/llm/providers/add", json={"name": "p1", "type": "openai_compat",
+                "base_url": "http://x", "model": "m1", "api_key": "k"})
+    r = client.post("/api/llm/providers/delete", json={"name": "p1"})
+    assert r.status_code == 200
+    assert r.json()["providers"] == []
+
+
+def test_api_default_set(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    client.post("/api/llm/providers/add", json={"name": "p1", "type": "openai_compat",
+                "base_url": "http://x", "model": "m1", "api_key": "k"})
+    r = client.post("/api/llm/default/set", json={"name": "p1"})
+    assert r.status_code == 200
+    assert r.json()["default"] == "p1"
+
+
+def test_api_test_env_missing(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    r = client.post("/api/llm/providers/test", json={"name": "p1", "type": "anthropic",
+                    "model": "m", "api_key": "env:NOT_SET_XYZ"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert "NOT_SET_XYZ" in r.json()["error"]
+
+
+def test_api_chat_uses_default_provider(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path, monkeypatch)
+    client.post("/api/llm/providers/add", json={"name": "p1", "type": "openai_compat",
+                "base_url": "http://127.0.0.1:1", "model": "m1", "api_key": "k"})
+    client.post("/api/llm/default/set", json={"name": "p1"})
+    r = client.post("/api/chat", json={"message": "hi"})
+    assert r.status_code == 200
+    assert "session_id" in r.json()

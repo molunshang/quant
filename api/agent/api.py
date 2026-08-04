@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from .agent import EventBus, LLMAgent
 from .executor import BacktestExecutor
-from .provider import load_providers
+from .config import ConfigError, ProviderConfigStore
 from .store import ChatStore, StrategyStore
 
 
@@ -18,7 +18,7 @@ def register_agent_routes(app: FastAPI) -> None:
     store = StrategyStore()
     chat_store = ChatStore()
     executor = BacktestExecutor()
-    providers = load_providers()  # {name: LLMProvider}
+    config = ProviderConfigStore()  # {name: LLMProvider} cache, reloaded on every write
 
     @app.post("/api/chat")
     def chat(body: dict):
@@ -30,9 +30,16 @@ def register_agent_routes(app: FastAPI) -> None:
         chat_store.add_message(session_id, "user", message)
 
         provider_name = body.get("provider")
-        provider = providers.get(provider_name) if provider_name else next(iter(providers.values()))
-        if provider is None:
+        providers = config.providers()
+        if not providers:
             raise HTTPException(status_code=400, detail="no provider configured")
+        if provider_name:
+            provider = providers.get(provider_name)
+            if provider is None:
+                raise HTTPException(status_code=400, detail=f"未知 provider: {provider_name}")
+        else:
+            default = config.get_default()
+            provider = providers.get(default) if default else next(iter(providers.values()))
 
         agent = LLMAgent(provider=provider, store=store, executor=executor)
         chat_store.add_message(session_id, "system", f"目标: {goal or message}")
@@ -65,7 +72,55 @@ def register_agent_routes(app: FastAPI) -> None:
 
     @app.get("/api/providers")
     def providers_list():
-        return {"providers": list(providers.keys())}
+        return {"providers": list(config.providers().keys())}
+
+    @app.get("/api/llm/providers/list")
+    def llm_providers_list():
+        try:
+            return config.list()
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/llm/providers/add")
+    def llm_providers_add(body: dict):
+        try:
+            return config.add(body)
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/llm/providers/update")
+    def llm_providers_update(body: dict):
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="缺少 name")
+        try:
+            return config.update(name, body)
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/llm/providers/delete")
+    def llm_providers_delete(body: dict):
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="缺少 name")
+        try:
+            return config.delete(name)
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/llm/providers/test")
+    def llm_providers_test(body: dict):
+        return config.test(body)
+
+    @app.post("/api/llm/default/set")
+    def llm_default_set(body: dict):
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="缺少 name")
+        try:
+            return config.set_default(name)
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     @app.get("/api/strategies/published")
     def published():
