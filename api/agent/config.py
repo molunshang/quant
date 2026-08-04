@@ -64,7 +64,7 @@ class ProviderConfigStore:
             self._load_error = None
             try:
                 self._providers = load_providers(self.path)
-            except (ValueError, KeyError) as e:
+            except Exception as e:  # noqa: BLE001 - any load failure degrades to {} + surfaced error
                 self._providers = {}
                 self._load_error = f"配置解析失败: {e}"
 

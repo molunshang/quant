@@ -283,3 +283,14 @@ def test_api_chat_uses_default_provider(tmp_path, monkeypatch):
     r = client.post("/api/chat", json={"message": "hi"})
     assert r.status_code == 200
     assert "session_id" in r.json()
+
+
+def test_add_provider_with_unset_env_degrades_gracefully(tmp_path):
+    store = ProviderConfigStore(str(_cfg(tmp_path)))
+    # api_key env var that is NOT set -> reload would raise OpenAIError if not caught
+    data = store.add({"name": "p1", "type": "openai_compat", "base_url": "http://127.0.0.1:1",
+                      "model": "m", "api_key": "env:SURELY_NOT_SET_XYZ"})
+    # must NOT raise; provider persisted; providers() degrades to {} with a surfaced error
+    assert [p["name"] for p in data["providers"]] == ["p1"]
+    assert "解析失败" in (data["error"] or "")
+    assert store.providers() == {}
