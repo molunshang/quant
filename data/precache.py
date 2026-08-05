@@ -35,9 +35,16 @@ class PrecacheManager:
         self._jobs: dict[int, PrecacheJob] = {}
         self._lock = threading.Lock()
         self._futures: list[concurrent.futures.Future] = []
-        self.cache_dir = cache_dir
         self._dl = DataLayer(cache=True)
-        self._dl.cache_dir = cache_dir
+        self.cache_dir = cache_dir
+
+    @property
+    def cache_dir(self) -> str:
+        return self._dl.cache_dir
+
+    @cache_dir.setter
+    def cache_dir(self, value: str) -> None:
+        self._dl.cache_dir = value
 
     def _work(self, job: PrecacheJob):
         with self._lock:
@@ -90,7 +97,7 @@ class PrecacheManager:
         import os
         from datetime import date
         today = date.today().isoformat()
-        for fn in os.listdir(self.cache_dir):
+        for fn in os.listdir(self._dl.cache_dir):
             if not fn.endswith(".csv"):
                 continue
             parts = fn.replace(".csv", "").split("_")
@@ -99,7 +106,7 @@ class PrecacheManager:
             typ, code, freq, adjust = parts
             # start from cached file's first date (parse from CSV) if available
             start = "2020-01-01"
-            path = os.path.join(self.cache_dir, fn)
+            path = os.path.join(self._dl.cache_dir, fn)
             try:
                 import pandas as pd
                 first = pd.read_csv(path, usecols=["date"])["date"].iloc[0]

@@ -1,6 +1,8 @@
 """Tests for the precache service (data.precache)."""
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 
 from data.precache import PrecacheManager
@@ -8,8 +10,12 @@ from data.sources import DataLayer
 
 
 def test_submit_and_list_jobs(monkeypatch, tmp_path):
-    # stub DataLayer so no real network
+    calls = []
+
+    # stub DataLayer so no real network; record kwargs to guard the
+    # force=True write-through and start/end/freq/adjust propagation
     def fake_get_bars(self, *a, **k):
+        calls.append(k)
         return pd.DataFrame({"date": ["2024-01-02"], "open": [1.0], "high": [1.0],
                              "low": [1.0], "close": [1.0], "volume": [1], "factor": [1.0]})
     monkeypatch.setattr(DataLayer, "get_bars", fake_get_bars)
@@ -23,6 +29,14 @@ def test_submit_and_list_jobs(monkeypatch, tmp_path):
     assert all(j["symbol"] in ("600519", "510300") for j in jobs)
     mgr.wait_all()
     assert all(j["status"] == "done" for j in mgr.list())
+    # every get_bars call must write through the cache and carry the submit params
+    assert len(calls) == 2
+    for k in calls:
+        assert k.get("force") is True
+        assert k.get("freq") == "daily"
+        assert k.get("start") == "2024-01-01"
+        assert k.get("end") == "2024-01-31"
+        assert k.get("adjust") == "qfq"
 
 
 def test_refresh_all_submits_jobs_from_cache_files(monkeypatch, tmp_path):
@@ -33,7 +47,10 @@ def test_refresh_all_submits_jobs_from_cache_files(monkeypatch, tmp_path):
     (tmp_path / "etf_510300_daily_qfq.csv").write_text(
         "date,open,high,low,close,volume,factor\n2023-06-01,3.0,3.1,2.9,3.05,5000,1.0\n")
 
+    calls = []
+
     def fake_get_bars(self, *a, **k):
+        calls.append((a[0], k))
         return pd.DataFrame({"date": ["2024-01-02"], "open": [1.0], "high": [1.0],
                              "low": [1.0], "close": [1.0], "volume": [1], "factor": [1.0]})
     monkeypatch.setattr(DataLayer, "get_bars", fake_get_bars)
@@ -49,10 +66,24 @@ def test_refresh_all_submits_jobs_from_cache_files(monkeypatch, tmp_path):
     starts = {j["symbol"]: j["start"] for j in jobs}
     assert starts["600519"] == "2024-01-02"
     assert starts["510300"] == "2023-06-01"
+    # every get_bars call must write through the cache; start/end must be
+    # the job's own (per-symbol first cached date -> today)
+    assert len(calls) == 2
+    call_starts = {info.code: k for info, k in calls}
+    for info, k in calls:
+        assert k.get("force") is True
+        assert k.get("freq") == "daily"
+        assert k.get("adjust") == "qfq"
+    assert call_starts["600519"]["start"] == "2024-01-02"
+    assert call_starts["510300"]["start"] == "2023-06-01"
+    assert all(k["end"] == date.today().isoformat() for _, k in calls)
 
 
 def test_job_error_captured(monkeypatch, tmp_path):
+    calls = []
+
     def fake_get_bars(self, *a, **k):
+        calls.append(k)
         raise RuntimeError("boom")
     monkeypatch.setattr(DataLayer, "get_bars", fake_get_bars)
 
@@ -62,3 +93,6 @@ def test_job_error_captured(monkeypatch, tmp_path):
     j = mgr.get(ids[0])
     assert j["status"] == "error"
     assert "boom" in j["error"]
+    # the failing call still went through with the write-through flag
+    assert len(calls) == 1
+    assert calls[0].get("force") is True
