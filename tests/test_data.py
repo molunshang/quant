@@ -83,3 +83,30 @@ def test_sina_source_forwards_adjust(monkeypatch):
     src.fetch_daily(info, "2024-01-01", "2024-01-05", "1")
     assert calls and calls[0][3] == "", \
         f"legacy '1' should reach akshare as raw, got {calls[0][3] if calls else None}"
+
+
+def test_fetch_with_factor(monkeypatch):
+    import akshare as ak
+    from data.sources import DataLayer, SymbolInfo
+
+    none_df = pd.DataFrame({
+        "date": ["2024-01-02", "2024-01-03", "2024-01-04"],
+        "open": [10.0, 10.5, 9.0], "high": [11.0, 11.0, 9.5],
+        "low": [9.8, 10.0, 8.8], "close": [10.5, 9.0, 9.2], "volume": [1000, 2000, 3000],
+    })
+    qfq_df = none_df.copy()
+    qfq_df["close"] = [10.5 * 1.5, 9.0 * 1.5, 9.2 * 1.5]  # 1.5x factor
+
+    calls = []
+    def fake_hist(symbol, period, start_date, end_date, adjust):
+        calls.append(adjust)
+        return qfq_df if adjust == "qfq" else none_df
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+    dl = DataLayer(cache=False)
+    info = SymbolInfo("600519", "茅台", "stock", "sh")
+    df = dl._fetch_with_factor(info, "2024-01-01", "2024-01-31")
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume", "factor"]
+    assert calls == ["", "qfq"] or calls == ["qfq", ""]
+    assert abs(df["factor"].iloc[0] - 1.5) < 1e-6
+    assert abs(df["close"].iloc[0] - 10.5) < 1e-6  # close is RAW price

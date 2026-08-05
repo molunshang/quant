@@ -35,6 +35,7 @@ _COL_MAP = {
     "close": "close",
     "volume": "volume",
     "amount": "amount",
+    "factor": "factor",
 }
 
 
@@ -49,14 +50,22 @@ class SymbolInfo:
 
 
 def normalize(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename columns to OHLCV standard, sort by date, reset index."""
+    """Rename columns to OHLCV standard, sort by date, reset index.
+
+    A `factor` column is preserved when present in the input (not added when
+    absent), so downstream code can rely on the factor's presence to decide
+    whether a cache holds the new format.
+    """
     if df is None or df.empty:
         return pd.DataFrame(columns=OHLCV_COLS + ["date"])
     df = df.rename(columns=_COL_MAP)
-    for c in ["date"] + OHLCV_COLS:
+    keep = ["date"] + OHLCV_COLS
+    if "factor" in df.columns:
+        keep = keep + ["factor"]
+    for c in keep:
         if c not in df.columns:
             df[c] = None
-    df = df[["date"] + OHLCV_COLS]
+    df = df[keep]
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     df = df.dropna(subset=["close"])
     df = df.sort_values("date").reset_index(drop=True)
@@ -173,6 +182,41 @@ class DataLayer:
     def _cache_path(self, symbol: SymbolInfo, freq: str, adjust: str) -> str:
         key = f"{symbol.type}_{symbol.code}_{freq}_{adjust}.csv"
         return os.path.join(CACHE_DIR, key)
+
+    def _fetch_with_factor(self, symbol, start, end, adjust="qfq") -> pd.DataFrame:
+        """Fetch raw + qfq prices for the SAME dates, derive per-share cumulative
+        adjustment factor = qfq_close / raw_close. Returns columns
+        [date, open, high, low, close, volume, factor] where close is RAW."""
+        import akshare as ak
+
+        if adjust == "none":
+            return self._fetch_raw(symbol, start, end)
+        if adjust == "hfq":
+            adjust = "qfq"  # deprecated: map to qfq behavior
+
+        raw = ak.stock_zh_a_hist(
+            symbol=symbol.code, period="daily",
+            start_date=start.replace("-", ""), end_date=end.replace("-", ""),
+            adjust="",
+        )
+        qfq = ak.stock_zh_a_hist(
+            symbol=symbol.code, period="daily",
+            start_date=start.replace("-", ""), end_date=end.replace("-", ""),
+            adjust="qfq",
+        )
+        raw = normalize(raw).set_index("date")
+        qfq = normalize(qfq).set_index("date")
+        joined = raw.join(qfq["close"], rsuffix="_qfq")
+        joined["factor"] = joined["close_qfq"] / joined["close"]
+        joined.loc[joined["close"] <= 0, "factor"] = None
+        joined["factor"] = joined["factor"].ffill()
+        joined = joined.dropna(subset=["factor"]).reset_index()
+        return joined[["date", "open", "high", "low", "close", "volume", "factor"]]
+
+    def _fetch_raw(self, symbol, start, end) -> pd.DataFrame:
+        df = EastMoneySource().fetch_daily(symbol, start, end, adjust="")
+        df["factor"] = 1.0
+        return df[["date", "open", "high", "low", "close", "volume", "factor"]]
 
     def get_bars(
         self,
