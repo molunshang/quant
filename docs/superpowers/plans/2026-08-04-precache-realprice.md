@@ -161,7 +161,7 @@ def test_get_bars_old_format_redownloads(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
     dl = DataLayer(cache=True)
-    dl.CACHE_DIR = str(tmp_path)  # monkeypatch cache dir
+    dl.cache_dir = str(tmp_path)  # monkeypatch cache dir (self.cache_dir per Task 2)
     info = SymbolInfo("600519", "茅台", "stock", "sh")
     df = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
     assert "factor" in df.columns
