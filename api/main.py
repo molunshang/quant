@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from data.precache import manager as precache_manager
 from data.registry import get_registry
 from strategies.manager import StrategyManager
 
@@ -118,6 +119,42 @@ def meta():
         "default_lot_size": 100,
         "metrics_available": ["total_return", "annual_return", "max_drawdown", "volatility", "sharpe", "win_rate", "n_trades"],
     }
+
+
+@app.post("/api/data/precache")
+def precache_submit(body: dict):
+    symbols = body.get("symbols") or []
+    if not symbols:
+        raise HTTPException(status_code=400, detail="symbols required")
+    if not isinstance(symbols, list):
+        raise HTTPException(status_code=400, detail="symbols must be a list")
+    job_ids = precache_manager.submit(
+        symbols=symbols,
+        freq=body.get("freq", "daily"),
+        start=body.get("start", "2020-01-01"),
+        end=body.get("end", "2024-12-31"),
+        adjust=body.get("adjust", "qfq"),
+    )
+    return {"job_ids": job_ids}
+
+
+@app.get("/api/data/precache/jobs")
+def precache_jobs():
+    return {"jobs": precache_manager.list()}
+
+
+@app.get("/api/data/precache/{job_id}")
+def precache_job(job_id: int):
+    job = precache_manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    return {"job": job}
+
+
+@app.post("/api/data/precache/refresh")
+def precache_refresh():
+    precache_manager.refresh_all()
+    return {"started": True}
 
 
 from .agent.api import register_agent_routes

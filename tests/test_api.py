@@ -81,3 +81,27 @@ def test_backtest_endpoint_with_mock():
     first = m["equity_curve"][0]["equity"]
     assert first < 100_000
     assert first > 99_000
+
+
+def test_precache_api_submit_and_query(monkeypatch):
+    import pandas as pd
+    from data.precache import manager as pm
+
+    # stub the manager's data layer — no real network in tests
+    def fake_get_bars(self, *a, **k):
+        return pd.DataFrame({"date": ["2024-01-02"], "open": [1.0], "high": [1.0],
+                             "low": [1.0], "close": [1.0], "volume": [1], "factor": [1.0]})
+    monkeypatch.setattr(type(pm._dl), "get_bars", fake_get_bars)
+
+    from fastapi.testclient import TestClient
+    from api.main import app
+    client = TestClient(app)
+    r = client.post("/api/data/precache", json={
+        "symbols": ["600519"], "freq": "daily", "start": "2024-01-01", "end": "2024-01-31", "adjust": "qfq"
+    })
+    assert r.status_code == 200
+    job_ids = r.json()["job_ids"]
+    assert len(job_ids) == 1
+    r2 = client.get(f"/api/data/precache/{job_ids[0]}")
+    assert r2.status_code == 200
+    assert r2.json()["job"]["symbol"] == "600519"
