@@ -134,3 +134,42 @@ def test_get_bars_old_format_redownloads(monkeypatch, tmp_path):
     df = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
     assert "factor" in df.columns
     assert len(df) == 2
+
+
+def test_get_bars_minute_cache_has_factor(monkeypatch, tmp_path):
+    """Minute bars are fetched as before, but the cached CSV gets a factor=1
+    column so the new-format detection keeps the minute cache hit path working."""
+    from data.sources import DataLayer, SymbolInfo
+
+    def fake_minute(symbol, period, start_date, end_date, adjust="qfq"):
+        return pd.DataFrame({
+            "date": ["2024-01-02", "2024-01-03"],
+            "open": [10.0, 11.0], "high": [11.0, 12.0], "low": [9.0, 10.0],
+            "close": [10.5, 11.5], "volume": [1000, 2000],
+        })
+
+    class FakeMinuteSource:
+        name = "fake_minute"
+        def supports(self, symbol):
+            return True
+        def fetch_minute(self, symbol, start, end, period="5"):
+            return fake_minute(symbol, period, start, end)
+
+    dl = DataLayer(cache=True)
+    dl.cache_dir = str(tmp_path)
+    dl.sources = [FakeMinuteSource()]
+    info = SymbolInfo("600519", "茅台", "stock", "sh")
+
+    df = dl.get_bars(info, "5", "2024-01-01", "2024-01-31", "qfq")
+    assert "factor" in df.columns
+
+    # cache written with factor=1; a second call hits the cache (no re-fetch)
+    calls = {"n": 0}
+    class FakeMinuteSource2(FakeMinuteSource):
+        def fetch_minute(self, symbol, start, end, period="5"):
+            calls["n"] += 1
+            return fake_minute(symbol, period, start, end)
+    dl.sources = [FakeMinuteSource2()]
+    df2 = dl.get_bars(info, "5", "2024-01-01", "2024-01-31", "qfq")
+    assert calls["n"] == 0
+    assert list(df2.columns) == ["date", "open", "high", "low", "close", "volume", "factor"]
