@@ -163,6 +163,30 @@ th { color:var(--muted); font-weight:500; }
   <div id="llmMsg" class="status"></div>
 </div>
 
+<div class="panel" id="precachePanel">
+  <h3>📦 数据预缓存</h3>
+  <label for="pcSymbols">标的（逗号分隔，如 600519,510300）</label>
+  <input id="pcSymbols" placeholder="600519,510300">
+  <label for="pcFreq">频率</label>
+  <select id="pcFreq">
+    <option value="daily" selected>日线</option>
+  </select>
+  <label for="pcStart">起始日期</label><input id="pcStart" value="2020-01-01">
+  <label for="pcEnd">结束日期</label><input id="pcEnd" value="2024-12-31">
+  <label for="pcAdjust">复权</label>
+  <select id="pcAdjust"><option value="qfq" selected>qfq</option><option value="none">none</option></select>
+  <div style="margin-top:8px;display:flex;gap:8px;">
+    <button id="pcSubmit" class="btn" style="flex:1">预缓存</button>
+    <button id="pcRefresh" class="btn" style="flex:1">刷新已缓存</button>
+  </div>
+  <div id="pcMsg" class="status"></div>
+  <h3 style="font-size:14px;color:var(--muted);margin-top:12px;">任务列表</h3>
+  <table id="pcJobsTable">
+    <thead><tr><th>ID</th><th>标的</th><th>状态</th><th>进度</th><th>错误</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 let equityChart, klineChart, drawdownChart;
@@ -323,6 +347,39 @@ async function testLlmForm() {
 $('llmSave').addEventListener('click', saveLlmProvider);
 $('llmTestForm').addEventListener('click', testLlmForm);
 loadLlmProviders();
+
+// ---- data precache panel ----
+const $p = id => document.getElementById(id);
+$p('pcSubmit').addEventListener('click', async () => {
+  const symbols = $p('pcSymbols').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!symbols.length) { $p('pcMsg').textContent = '请填写标的'; return; }
+  const res = await fetch('/api/data/precache', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      symbols, freq: $p('pcFreq').value,
+      start: $p('pcStart').value, end: $p('pcEnd').value, adjust: $p('pcAdjust').value
+    })
+  });
+  const data = await res.json();
+  $p('pcMsg').textContent = data.job_ids ? `已提交 ${data.job_ids.length} 个任务` : (data.detail || '失败');
+  loadPrecacheJobs();
+});
+$p('pcRefresh').addEventListener('click', async () => {
+  await fetch('/api/data/precache/refresh', {method: 'POST'});
+  $p('pcMsg').textContent = '已触发刷新';
+});
+
+async function loadPrecacheJobs() {
+  const res = await fetch('/api/data/precache/jobs');
+  const data = await res.json();
+  const tbody = $p('pcJobsTable').querySelector('tbody');
+  tbody.innerHTML = data.jobs.map(j => `
+    <tr><td>${j.id}</td><td>${j.symbol}</td><td>${j.status}</td>
+    <td>${j.progress}%</td><td>${j.error || ''}</td></tr>`).join('');
+}
+setInterval(loadPrecacheJobs, 3000);
+loadPrecacheJobs();
 
 function chatConnect(sessionId) {
   if (chatES) chatES.close();
