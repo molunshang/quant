@@ -273,7 +273,7 @@ class DataLayer:
                     # apply start/end filter on fresh data too (sources may return full history)
                     df = df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
                     if self.cache and not df.empty:
-                        if "factor" not in df.columns:
+                        if freq != "daily" and "factor" not in df.columns:
                             df = df.copy()
                             df["factor"] = 1.0  # new-format marker (minute bars have no factor)
                         df.to_csv(cache_path, index=False)

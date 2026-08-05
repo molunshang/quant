@@ -173,3 +173,49 @@ def test_get_bars_minute_cache_has_factor(monkeypatch, tmp_path):
     df2 = dl.get_bars(info, "5", "2024-01-01", "2024-01-31", "qfq")
     assert calls["n"] == 0
     assert list(df2.columns) == ["date", "open", "high", "low", "close", "volume", "factor"]
+
+
+def test_get_bars_daily_failover_cache_old_format(monkeypatch, tmp_path):
+    """A daily failover write must NOT annotate factor=1: the cache stays old
+    format (no factor column) so a later get_bars re-downloads through the
+    factor path instead of serving qfq-adjusted prices as if they were raw."""
+    import akshare as ak
+    from data.sources import DataLayer, SymbolInfo
+
+    # factor-fetch path fails -> failover loop runs -> sources are tried
+    def fake_hist(*args, **kwargs):
+        raise RuntimeError("simulate factor-fetch failure")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+
+    calls = {"n": 0}
+    class FakeDailySource:
+        name = "fake_daily"
+        def supports(self, symbol):
+            return True
+        def fetch_daily(self, symbol, start, end, adjust="qfq"):
+            calls["n"] += 1
+            return pd.DataFrame({
+                "date": ["2024-01-02", "2024-01-03"],
+                "open": [10.0, 11.0], "high": [11.0, 12.0], "low": [9.0, 10.0],
+                "close": [10.5, 11.5], "volume": [1000, 2000],
+            })
+
+    dl = DataLayer(cache=True)
+    dl.cache_dir = str(tmp_path)
+    dl.sources = [FakeDailySource()]
+    info = SymbolInfo("600519", "茅台", "stock", "sh")
+
+    df = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
+    assert calls["n"] == 1
+    assert "factor" not in df.columns
+
+    # cached CSV must stay old format (no factor), so the next call re-downloads
+    cache_path = dl._cache_path(info, "daily", "qfq")
+    cached = pd.read_csv(cache_path)
+    assert "factor" not in cached.columns
+
+    # second call re-downloads rather than serving the stale qfq cache
+    df2 = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
+    assert calls["n"] == 2
+    assert "factor" not in df2.columns
