@@ -67,6 +67,10 @@ class BacktestEngine:
         bars = bars.reset_index(drop=True)
         self.cfg.params = params or {}
 
+        # Per-share cumulative adjustment factor (qfq/raw). Missing factor column
+        # or NaN/0 values behave as 1 (no adjustment).
+        factors = bars["factor"].astype(float).fillna(1.0).to_numpy() if "factor" in bars.columns else None
+
         ctx = Context(self.cfg.initial_cash, engine=self)
         ctx.bars = bars
         equity_rows: list[dict] = []
@@ -76,6 +80,11 @@ class BacktestEngine:
             ctx.current_bar = bar
             ctx.current_date = str(bar["date"])
             ctx.bar_index = i
+
+            if factors is not None and i > 0:
+                ratio = factors[i] / factors[i - 1] if factors[i - 1] else 1.0
+                if ratio != 1.0:
+                    self._apply_corporate_action(ctx, ratio)
 
             strategy(ctx, self.cfg.params)
 
@@ -168,6 +177,17 @@ class BacktestEngine:
         return True
 
     # ---- helpers ----
+    def _apply_corporate_action(self, ctx: Context, ratio: float) -> None:
+        """Treat every factor-change day as a split (total-return approx): scale the
+        share count by the ratio and divide the cost basis to keep value continuous."""
+        if ctx.position == 0:
+            return
+        if ratio > 1.0:
+            new_pos = int(ctx.position * ratio // self.cfg.lot_size) * self.cfg.lot_size
+            if new_pos > 0:
+                ctx.avg_cost = ctx.avg_cost * ctx.position / new_pos
+                ctx.position = new_pos
+
     def _is_limit_up(self, bar: pd.Series, rules: TradingRules) -> bool:
         prev_close = float(bar.get("prev_close", 0.0)) or float(bar["open"])
         if prev_close <= 0:

@@ -127,6 +127,25 @@ def test_sma_cross_generates_trades():
     assert len([t for t in result.trades if t["side"] == "sell"]) > 0
 
 
+def test_corporate_action_split_adjusts_position():
+    bars = make_bars(10)
+    bars["factor"] = 1.0
+    bars.loc[bars["date"] == bars["date"].iloc[5], "factor"] = 2.0  # 2:1 split on day 5
+    captured = {}
+
+    def strategy(ctx, params):
+        if ctx.bar_index == 0:
+            ctx.buy(shares=100)
+        if ctx.bar_index == 5:
+            captured["position"] = ctx.position
+            captured["avg_cost"] = ctx.avg_cost
+
+    engine = BacktestEngine(EngineConfig(initial_cash=100_000))
+    engine.run(strategy, bars)
+    assert captured["position"] == 200      # doubled by split
+    assert captured["avg_cost"] < 60        # cost basis roughly halved (slightly >50 due to commission)
+
+
 def test_compute_metrics_basic():
     eq = pd.DataFrame({
         "date": pd.date_range("2023-01-01", periods=50, freq="B").strftime("%Y-%m-%d"),
