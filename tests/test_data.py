@@ -110,3 +110,27 @@ def test_fetch_with_factor(monkeypatch):
     assert calls == ["", "qfq"] or calls == ["qfq", ""]
     assert abs(df["factor"].iloc[0] - 1.5) < 1e-6
     assert abs(df["close"].iloc[0] - 10.5) < 1e-6  # close is RAW price
+
+
+def test_get_bars_old_format_redownloads(monkeypatch, tmp_path):
+    import akshare as ak
+    from data.sources import DataLayer, SymbolInfo
+
+    old_csv = tmp_path / "stock_600519_daily_qfq.csv"
+    old_csv.write_text("date,open,high,low,close,volume\n2024-01-02,10,11,9,10.5,1000\n")
+
+    def fake_hist(symbol, period, start_date, end_date, adjust):
+        df = pd.DataFrame({
+            "date": ["2024-01-02", "2024-01-03"],
+            "open": [10.0, 11.0], "high": [11.0, 12.0], "low": [9.0, 10.0],
+            "close": [10.5, 11.5], "volume": [1000, 2000],
+        })
+        return df if adjust == "qfq" else df
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+    dl = DataLayer(cache=True)
+    dl.cache_dir = str(tmp_path)  # monkeypatch cache dir (self.cache_dir per Task 2)
+    info = SymbolInfo("600519", "茅台", "stock", "sh")
+    df = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
+    assert "factor" in df.columns
+    assert len(df) == 2

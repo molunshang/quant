@@ -177,11 +177,16 @@ class DataLayer:
     def __init__(self, cache: bool = True):
         self.sources: list[DataSource] = [EastMoneySource(), FundSource(), SinaSource()]
         self.cache = cache
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        self.cache_dir = CACHE_DIR
+        os.makedirs(self.cache_dir, exist_ok=True)
 
     def _cache_path(self, symbol: SymbolInfo, freq: str, adjust: str) -> str:
         key = f"{symbol.type}_{symbol.code}_{freq}_{adjust}.csv"
-        return os.path.join(CACHE_DIR, key)
+        return os.path.join(self.cache_dir, key)
+
+    def _is_new_format(self, df: pd.DataFrame) -> bool:
+        """A cache file is in the new format when it carries the `factor` column."""
+        return "factor" in df.columns
 
     def _fetch_with_factor(self, symbol, start, end, adjust="qfq") -> pd.DataFrame:
         """Fetch raw + qfq prices for the SAME dates, derive per-share cumulative
@@ -225,16 +230,37 @@ class DataLayer:
         start: str = "2020-01-01",
         end: str = "2024-12-31",
         adjust: str = "qfq",
+        force: bool = False,
     ) -> pd.DataFrame:
-        """Fetch bars, using cache when possible, failing over across sources."""
+        """Fetch bars, using cache when possible, failing over across sources.
+
+        Daily bars are stored as real prices + a per-share cumulative `factor`
+        column (new format). Cached files without `factor` are old format and are
+        silently re-downloaded. `force=True` skips the cache entirely.
+        """
         cache_path = self._cache_path(symbol, freq, adjust)
-        if self.cache and os.path.exists(cache_path):
+        if self.cache and not force and os.path.exists(cache_path):
             df = pd.read_csv(cache_path)
-            if not df.empty:
+            if not df.empty and self._is_new_format(df):
                 df["date"] = df["date"].astype(str)
                 return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
 
         errors = []
+        if freq == "daily":
+            try:
+                if adjust == "none":
+                    df = self._fetch_raw(symbol, start, end)
+                else:
+                    df = self._fetch_with_factor(symbol, start, end, adjust)
+                if df is not None and not df.empty:
+                    df = df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
+                    if self.cache and not df.empty:
+                        df.to_csv(cache_path, index=False)
+                    return df
+            except Exception as e:  # noqa: BLE001 - failover is the intent
+                errors.append(f"factor fetch: {type(e).__name__}: {e}")
+                time.sleep(0.3)
+
         for src in self.sources:
             if not src.supports(symbol):
                 continue
