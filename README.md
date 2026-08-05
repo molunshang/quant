@@ -11,6 +11,7 @@
 - **策略草稿 → 发布 + 版本管理**：迭代中的策略为草稿，达标才发布，记录指标快照，SQLite 持久化
 - **多标的**：股票、基金、ETF
 - **多数据源容错**：东方财富（首选）→ 新浪（降级），CSV 缓存
+- **数据预缓存**：真实价 + 每股复权因子存储，手动 API 或每日定时预下载，回测不再临时联网
 - **A股交易规则**：T+1、涨跌停、印花税（股票卖出 0.05%，ETF/基金免征）、佣金、一手 100 股
 - **日线 + 分钟线**：bar 频率可配置
 
@@ -59,6 +60,15 @@ python3 -m venv .venv
 | GET  | `/api/symbols` | 可交易标的名录 |
 | GET  | `/api/meta` | bar 频率、佣金默认值、可用指标 |
 | POST | `/api/chart/equity` | 权益曲线 ECharts 配置 |
+
+### 数据预缓存
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/data/precache` | 异步提交预缓存任务，返回 job_ids |
+| GET  | `/api/data/precache/jobs` | 任务列表（含进度） |
+| GET  | `/api/data/precache/{job_id}` | 单任务进度 |
+| POST | `/api/data/precache/refresh` | 手动触发刷新已缓存标的 |
 
 ### AI Agent / LLM 配置
 
