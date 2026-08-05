@@ -1,6 +1,11 @@
 """FastAPI application exposing the backtest + agent API and serving the web UI."""
 from __future__ import annotations
 
+import json
+import os
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -18,6 +23,43 @@ app = FastAPI(title="A股回测系统", version="0.1.0")
 
 # Shared singletons
 _strategies = StrategyManager()
+
+
+def _read_data_config() -> dict:
+    path = os.environ.get("QUANT_DATA_CONFIG") or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "config", "data.json"
+    )
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:  # noqa: BLE001 - default config
+        return {}
+
+
+def _should_run_now(update_time: str) -> bool:
+    now = datetime.now().strftime("%H:%M")
+    return now == update_time
+
+
+def _daily_scheduler_loop():
+    cfg = _read_data_config()
+    update_time = cfg.get("daily_update_time", "15:30")
+    while True:
+        if _should_run_now(update_time):
+            try:
+                precache_manager.refresh_all()
+            except Exception:  # noqa: BLE001 - keep the loop alive
+                pass
+            time.sleep(60)  # avoid re-triggering within the same minute
+        time.sleep(30)
+
+
+def _start_daily_scheduler():
+    threading.Thread(target=_daily_scheduler_loop, daemon=True).start()
+
+
+_start_daily_scheduler()
 
 # Serve web UI (optional; directory may not exist yet)
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"

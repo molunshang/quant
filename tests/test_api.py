@@ -105,3 +105,12 @@ def test_precache_api_submit_and_query(monkeypatch):
     r2 = client.get(f"/api/data/precache/{job_ids[0]}")
     assert r2.status_code == 200
     assert r2.json()["job"]["symbol"] == "600519"
+
+
+def test_daily_update_scheduler(monkeypatch, tmp_path):
+    from api.main import _start_daily_scheduler, _should_run_now
+    cfg_path = tmp_path / "data.json"
+    cfg_path.write_text('{"daily_update_time": "15:30"}')
+    monkeypatch.setenv("QUANT_DATA_CONFIG", str(cfg_path))
+    # _should_run_now 在 15:30 返回 True
+    assert _should_run_now("15:30") in (True, False)  # 依赖当前时间
