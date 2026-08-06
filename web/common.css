@@ -9,7 +9,6 @@ body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
 .nav-link:hover { color:var(--text); background:var(--panel); }
 .nav-link.active { background:var(--accent); color:#fff; }
 .main { display:flex; gap:16px; padding:16px 24px; }
-.controls { width:320px; flex-shrink:0; display:flex; flex-direction:column; gap:12px; }
 .panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; }
 .panel h3 { font-size:14px; margin-bottom:10px; color:var(--muted); font-weight:500; }
 label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
@@ -36,5 +35,3 @@ th { color:var(--muted); font-weight:500; }
 .buy { color:var(--red); } .sell { color:var(--green); }
 .status { font-size:12px; color:var(--muted); margin-top:8px; min-height:16px; }
 .hidden { display:none; }
-.strat-src { display:none; }
-#strategyType { margin-bottom:4px; }
