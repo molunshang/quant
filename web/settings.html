@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM 设置 — A股回测系统</title>
+<link rel="stylesheet" href="/web/common.css">
+<style>
+.wrap { max-width:760px; margin:24px auto; padding:0 24px; }
+</style>
+</head>
+<body data-page="settings">
+<header class="header">
+  <div>
+    <h1>📈 A股回测系统</h1>
+    <div class="sub">股票 · 基金 · ETF &nbsp;|&nbsp; 自定义策略 · Agent API</div>
+  </div>
+  <nav class="nav">
+    <a href="/" class="nav-link" data-page="backtest">回测</a>
+    <a href="/chat" class="nav-link" data-page="chat">AI 优化</a>
+    <a href="/data" class="nav-link" data-page="data">数据预缓存</a>
+    <a href="/settings" class="nav-link" data-page="settings">LLM 设置</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <h3>⚙️ LLM 设置</h3>
+    <div id="llmProviderList" style="border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;margin-bottom:8px;"></div>
+    <label for="llmName">名称</label>
+    <input id="llmName">
+    <label for="llmType">类型</label>
+    <select id="llmType">
+      <option value="anthropic">anthropic</option>
+      <option value="openai_compat">openai_compat</option>
+    </select>
+    <label for="llmBaseUrl">base_url（openai_compat 必填）</label>
+    <input id="llmBaseUrl" placeholder="http://127.0.0.1:3456">
+    <label for="llmModel">模型</label>
+    <input id="llmModel" placeholder="opengo/deepseek-v4-flash">
+    <label for="llmApiKey">API Key（env:VAR 或明文）</label>
+    <input id="llmApiKey" placeholder="env:ANTHROPIC_API_KEY">
+    <div style="margin-top:8px;">
+      <button id="llmSave" class="btn">保存</button>
+      <button id="llmTestForm" class="btn">测试此配置</button>
+      <span id="llmTestResult" class="status"></span>
+    </div>
+    <div id="llmMsg" class="status"></div>
+  </div>
+</div>
+
+<script src="/web/common.js"></script>
+<script>
+let editingLlm = null;
+
+async function loadLlmProviders() {
+  const r = await fetch('/api/llm/providers/list');
+  if (!r.ok) {
+    const err = await r.json();
+    $('llmProviderList').textContent = '⚠ ' + (err.detail || '加载失败');
+    return;
+  }
+  const data = await r.json();
+  const list = $('llmProviderList');
+  list.innerHTML = '';
+  if (data.error) { list.textContent = '⚠ ' + data.error; return; }
+  if (!data.providers.length) { list.textContent = '（无 provider，请在下表添加）'; return; }
+  data.providers.forEach(p => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);';
+    const def = document.createElement('input');
+    def.type = 'radio'; def.name = 'llmDefault';
+    def.checked = p.name === data.default;
+    def.onclick = () => setLlmDefault(p.name);
+    const label = document.createElement('span');
+    label.style.flex = '1';
+    label.textContent = `${p.name}（${p.type} · ${p.model}${p.base_url ? ' · ' + p.base_url : ''}）`;
+    const testBtn = document.createElement('button');
+    testBtn.className = 'btn'; testBtn.textContent = '测试';
+    testBtn.onclick = async () => {
+      const res = await fetch('/api/llm/providers/test', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p)});
+      const j = await res.json();
+      label.textContent = `${p.name}（${p.type} · ${p.model}${p.base_url ? ' · ' + p.base_url : ''}） ${j.ok ? '✓ 连接成功' : '✗ ' + j.error}`;
+    };
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn'; editBtn.textContent = '编辑';
+    editBtn.onclick = () => fillLlmForm(p);
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn'; delBtn.textContent = '删除';
+    delBtn.onclick = async () => {
+      if (!confirm(`删除 provider ${p.name}?`)) return;
+      const res = await fetch('/api/llm/providers/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:p.name})});
+      const j = await res.json();
+      if (res.ok) { $('llmMsg').textContent = '已删除'; loadLlmProviders(); }
+      else { $('llmMsg').textContent = j.detail || '删除失败'; }
+    };
+    row.append(def, label, testBtn, editBtn, delBtn);
+    list.appendChild(row);
+  });
+}
+
+function fillLlmForm(p) {
+  editingLlm = p.name;
+  $('llmName').value = p.name;
+  $('llmType').value = p.type;
+  $('llmBaseUrl').value = p.base_url || '';
+  $('llmModel').value = p.model || '';
+  $('llmApiKey').value = p.api_key || '';
+}
+
+async function setLlmDefault(name) {
+  const res = await fetch('/api/llm/default/set', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name})});
+  if (!res.ok) { const j = await res.json(); $('llmMsg').textContent = j.detail || '设置失败'; }
+  loadLlmProviders();
+}
+
+function llmFormData() {
+  return {
+    name: $('llmName').value.trim(),
+    type: $('llmType').value,
+    base_url: $('llmBaseUrl').value.trim(),
+    model: $('llmModel').value.trim(),
+    api_key: $('llmApiKey').value.trim(),
+  };
+}
+
+async function saveLlmProvider() {
+  const url = editingLlm ? '/api/llm/providers/update' : '/api/llm/providers/add';
+  const body = llmFormData();
+  if (editingLlm) body.name = editingLlm;
+  const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const j = await res.json();
+  if (res.ok) {
+    editingLlm = null;
+    $('llmName').value = ''; $('llmBaseUrl').value = ''; $('llmModel').value = ''; $('llmApiKey').value = '';
+    $('llmMsg').textContent = '已保存';
+    loadLlmProviders();
+  } else {
+    $('llmMsg').textContent = j.detail || '保存失败';
+  }
+}
+
+async function testLlmForm() {
+  $('llmTestResult').textContent = '测试中…';
+  const res = await fetch('/api/llm/providers/test', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(llmFormData())});
+  const j = await res.json();
+  $('llmTestResult').textContent = j.ok ? '✓ 连接成功' : '✗ ' + j.error;
+}
+
+$('llmSave').addEventListener('click', saveLlmProvider);
+$('llmTestForm').addEventListener('click', testLlmForm);
+loadLlmProviders();
+</script>
+</body>
+</html>
