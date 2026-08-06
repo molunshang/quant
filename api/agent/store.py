@@ -265,3 +265,71 @@ class ChatStore:
     @_synchronized
     def close(self):
         self.conn.close()
+
+
+class AgentSessionStore:
+    """SQLite persistence for agent session state (goal-gate state machine).
+
+    A missing row means the session is idle. set() upserts and only updates
+    the columns explicitly passed; other columns keep their previous values.
+    """
+    def __init__(self, db_path: str | None = None):
+        os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False, timeout=10)
+        self.conn.row_factory = sqlite3.Row
+        self._init_schema()
+
+    def _init_schema(self):
+        self.conn.executescript("""
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            session_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            goal_json TEXT,
+            questions_json TEXT,
+            confirm_summary_json TEXT,
+            updated_at TEXT
+        );
+        """)
+        self.conn.commit()
+
+    @_synchronized
+    def get(self, session_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT session_id, status, goal_json, questions_json, confirm_summary_json, updated_at "
+            "FROM agent_sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    @_synchronized
+    def set(self, session_id: str, status: str, *, goal_json: str | None = None,
+            questions_json: str | None = None, confirm_summary_json: str | None = None) -> None:
+        now = _now()
+        passed = {"goal_json": goal_json, "questions_json": questions_json,
+                  "confirm_summary_json": confirm_summary_json}
+        existing = self.get(session_id)
+        if existing is None:
+            self.conn.execute(
+                "INSERT INTO agent_sessions "
+                "(session_id, status, goal_json, questions_json, confirm_summary_json, updated_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (session_id, status, passed["goal_json"], passed["questions_json"],
+                 passed["confirm_summary_json"], now),
+            )
+        else:
+            # 只更新显式传入的字段（非 None）；其余保留旧值
+            merged = dict(existing)
+            for k, v in passed.items():
+                if v is not None:
+                    merged[k] = v
+            self.conn.execute(
+                "UPDATE agent_sessions SET status=?, goal_json=?, questions_json=?, "
+                "confirm_summary_json=?, updated_at=? WHERE session_id=?",
+                (status, merged["goal_json"], merged["questions_json"],
+                 merged["confirm_summary_json"], now, session_id),
+            )
+        self.conn.commit()
+
+    @_synchronized
+    def close(self):
+        self.conn.close()
