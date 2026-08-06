@@ -86,19 +86,15 @@ def test_excepthook_writes_traceback(tmp_path, monkeypatch):
     assert "boom test" in content
 
 
-def test_excepthook_preserves_default(monkeypatch):
-    called = {"default": False}
-    orig = sys.excepthook
-    def fake_default(*args):
-        called["default"] = True
-    monkeypatch.setattr(sys, "excepthook", fake_default)
-    # our init replaces it with _excepthook which should call the (now-fake) default
+def test_excepthook_preserves_default(capsys):
+    """The custom hook must still run the builtin default (not swallow stderr)."""
     init_crash_logging()
     try:
-        raise RuntimeError("x")
+        raise RuntimeError("preserve-default")
     except RuntimeError:
         sys.excepthook(*sys.exc_info())
-    assert called["default"] is True
+    err = capsys.readouterr().err
+    assert "RuntimeError: preserve-default" in err
 
 
 def test_faulthandler_enabled():
@@ -215,7 +211,8 @@ git commit -m "feat: crash 日志模块 — faulthandler + excepthook + Rotating
 
 ```python
 def test_api_main_imports_init_crash_logging():
-    """api.main must call init_crash_logging at import time (early wiring)."""
+    """Importing api.main must call init_crash_logging (early wiring)."""
+    import api.main  # noqa: F401
     import data.crash_log as mod
     assert mod._initialized is True
 ```
