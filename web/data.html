@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据预缓存 — A股回测系统</title>
+<link rel="stylesheet" href="/web/common.css">
+<style>
+.wrap { max-width:760px; margin:24px auto; padding:0 24px; }
+</style>
+</head>
+<body data-page="data">
+<header class="header">
+  <div>
+    <h1>📈 A股回测系统</h1>
+    <div class="sub">股票 · 基金 · ETF &nbsp;|&nbsp; 自定义策略 · Agent API</div>
+  </div>
+  <nav class="nav">
+    <a href="/" class="nav-link" data-page="backtest">回测</a>
+    <a href="/chat" class="nav-link" data-page="chat">AI 优化</a>
+    <a href="/data" class="nav-link" data-page="data">数据预缓存</a>
+    <a href="/settings" class="nav-link" data-page="settings">LLM 设置</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <h3>📦 数据预缓存</h3>
+    <label for="pcSymbols">标的（逗号分隔，如 600519,510300）</label>
+    <input id="pcSymbols" placeholder="600519,510300">
+    <label for="pcFreq">频率</label>
+    <select id="pcFreq">
+      <option value="daily" selected>日线</option>
+    </select>
+    <label for="pcStart">起始日期</label><input id="pcStart" value="2020-01-01">
+    <label for="pcEnd">结束日期</label><input id="pcEnd" value="2024-12-31">
+    <label for="pcAdjust">复权</label>
+    <select id="pcAdjust"><option value="qfq" selected>qfq</option><option value="none">none</option></select>
+    <div style="margin-top:8px;display:flex;gap:8px;">
+      <button id="pcSubmit" class="btn" style="flex:1">预缓存</button>
+      <button id="pcRefresh" class="btn" style="flex:1">刷新已缓存</button>
+    </div>
+    <div id="pcMsg" class="status"></div>
+    <h3 style="font-size:14px;color:var(--muted);margin-top:12px;">任务列表</h3>
+    <table id="pcJobsTable">
+      <thead><tr><th>ID</th><th>标的</th><th>状态</th><th>进度</th><th>错误</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="/web/common.js"></script>
+<script>
+$('pcSubmit').addEventListener('click', async () => {
+  const symbols = $('pcSymbols').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!symbols.length) { $('pcMsg').textContent = '请填写标的'; return; }
+  const res = await fetch('/api/data/precache', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      symbols, freq: $('pcFreq').value,
+      start: $('pcStart').value, end: $('pcEnd').value, adjust: $('pcAdjust').value
+    })
+  });
+  const data = await res.json();
+  $('pcMsg').textContent = data.job_ids ? `已提交 ${data.job_ids.length} 个任务` : (data.detail || '失败');
+  loadPrecacheJobs();
+});
+$('pcRefresh').addEventListener('click', async () => {
+  await fetch('/api/data/precache/refresh', {method: 'POST'});
+  $('pcMsg').textContent = '已触发刷新';
+});
+
+async function loadPrecacheJobs() {
+  const res = await fetch('/api/data/precache/jobs');
+  const data = await res.json();
+  const tbody = $('pcJobsTable').querySelector('tbody');
+  tbody.innerHTML = data.jobs.map(j => `
+    <tr><td>${j.id}</td><td>${j.symbol}</td><td>${j.status}</td>
+    <td>${j.progress}%</td><td>${j.error || ''}</td></tr>`).join('');
+}
+setInterval(loadPrecacheJobs, 3000);
+loadPrecacheJobs();
+</script>
+</body>
+</html>
