@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 
 from fastapi import FastAPI, HTTPException
@@ -112,6 +113,7 @@ def register_agent_routes(app: FastAPI) -> None:
                 handle_chat(session_id, message, goal, provider, bus,
                             session_store, chat_store, store, executor)
             except Exception as e:  # noqa: BLE001 - surface errors, no eternal spinner
+                logging.exception("chat run failed for session %s", session_id)
                 bus.publish(session_id, {"type": "error", "error": str(e)})
                 chat_store.add_message(session_id, "assistant", f"出错了: {e}")
 

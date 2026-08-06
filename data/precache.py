@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import itertools
+import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -58,6 +59,7 @@ class PrecacheManager:
                 job.status = "done"
                 job.progress = 100
         except Exception as e:  # noqa: BLE001 - per-job error
+            logging.exception("precache job %s (%s) failed", job.id, job.symbol)
             with self._lock:
                 job.status = "error"
                 job.error = str(e)

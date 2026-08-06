@@ -81,3 +81,32 @@ def test_api_main_imports_init_crash_logging():
     import api.main  # noqa: F401
     import data.crash_log as mod
     assert mod._initialized is True
+
+
+def test_precache_work_logs_exception(monkeypatch, tmp_path):
+    import logging
+    import data.crash_log as mod
+    mod.init_crash_logging()
+    records = []
+    class Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+    h = Capture()
+    logging.getLogger().addHandler(h)
+
+    from data.precache import PrecacheManager, PrecacheJob
+    from data.sources import DataLayer
+
+    def boom(self, info, **kw):
+        raise RuntimeError("boom precache")
+
+    monkeypatch.setattr(DataLayer, "get_bars", boom)
+    mgr = PrecacheManager()
+    mgr._dl = DataLayer(cache=False)
+    job = PrecacheJob(id=1, symbol="600519", freq="daily", adjust="qfq",
+                      start="2024-01-01", end="2024-01-31")
+    mgr._work(job)
+    assert job.status == "error"
+    assert any(r.levelno == logging.ERROR and "boom precache" in str(r.exc_info)
+               for r in records), "precache _work failure must be logged"
+    logging.getLogger().removeHandler(h)
