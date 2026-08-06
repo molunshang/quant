@@ -110,14 +110,22 @@ async function sendChat() {
   chatAppend('用户', msg);
   chatStatus.textContent = '思考中…';
   chatSend.disabled = true;
-  const r = await fetch('/api/chat', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ message: msg, provider: chatProvider.value, session_id: chatSession }),
-  });
-  const data = await r.json();
+  let data;
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg, provider: chatProvider.value, session_id: chatSession }),
+    });
+    data = await r.json();
+  } catch (e) {
+    chatStatus.textContent = '⚠ 发送失败';
+    chatSend.disabled = false;
+    return;
+  }
   chatSession = data.session_id;
   chatConnect(chatSession);
-  chatSend.disabled = false;
+  // 按钮保持禁用，等首个 SSE 事件（running/clarify/confirm/done/error）再恢复；
+  // 断线由 onerror 恢复，避免"思考中"到首个事件之间的空窗被二次提交
 }
 chatSend.addEventListener('click', sendChat);
 chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });

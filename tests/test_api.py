@@ -143,7 +143,15 @@ def test_precache_job_non_int_returns_404():
 
 
 def test_web_pages():
-    for path in ("/", "/chat", "/data", "/settings"):
+    # Each route must serve its specific page — assert the unique <title> marker.
+    expected = {
+        "/": "<title>A股回测系统</title>",
+        "/chat": "<title>AI 目标优化",
+        "/data": "<title>数据预缓存",
+        "/settings": "<title>LLM 设置",
+    }
+    for path, marker in expected.items():
         r = client.get(path)
         assert r.status_code == 200, path
         assert "text/html" in r.headers["content-type"], path
+        assert marker in r.text, path
