@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -19,7 +20,17 @@ from strategies.manager import StrategyManager
 from .runner import run_backtest, run_optimize
 from .schemas import BacktestRequest, OptimizeRequest, RegisterStrategyRequest
 
-app = FastAPI(title="A股回测系统", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the daily refresh scheduler only when the server actually serves
+    # (uvicorn). Plain imports (tests, tools) must not spawn the thread.
+    _start_daily_scheduler()
+    yield
+    precache_manager.shutdown()
+
+
+app = FastAPI(title="A股回测系统", version="0.1.0", lifespan=lifespan)
 
 # Shared singletons
 _strategies = StrategyManager()
@@ -58,8 +69,6 @@ def _daily_scheduler_loop():
 def _start_daily_scheduler():
     threading.Thread(target=_daily_scheduler_loop, daemon=True).start()
 
-
-_start_daily_scheduler()
 
 # Serve web UI (optional; directory may not exist yet)
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -186,8 +195,12 @@ def precache_jobs():
 
 
 @app.get("/api/data/precache/{job_id}")
-def precache_job(job_id: int):
-    job = precache_manager.get(job_id)
+def precache_job(job_id: str):
+    try:
+        jid = int(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="unknown job")
+    job = precache_manager.get(jid)
     if job is None:
         raise HTTPException(status_code=404, detail="unknown job")
     return {"job": job}

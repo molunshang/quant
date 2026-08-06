@@ -197,7 +197,7 @@ class DataLayer:
         if adjust == "none":
             return self._fetch_raw(symbol, start, end)
         if adjust == "hfq":
-            adjust = "qfq"  # deprecated: map to qfq behavior
+            adjust = "qfq"  # hfq not supported in raw+factor storage: silently serve qfq behavior
 
         raw = ak.stock_zh_a_hist(
             symbol=symbol.code, period="daily",

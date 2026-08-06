@@ -5,8 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import itertools
 import threading
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from .registry import get_registry
@@ -74,7 +73,8 @@ class PrecacheManager:
                 self._jobs[job_id] = job
             ids.append(job_id)
             fut = self._pool.submit(self._work, job)
-            self._futures.append(fut)
+            with self._lock:
+                self._futures.append(fut)
         return ids
 
     def get(self, job_id):
@@ -87,9 +87,12 @@ class PrecacheManager:
             return [j.__dict__ for j in sorted(self._jobs.values(), key=lambda x: x.id)]
 
     def wait_all(self, timeout: float = 120.0):
-        for fut in concurrent.futures.as_completed(self._futures, timeout=timeout):
+        with self._lock:
+            futures = list(self._futures)
+        for fut in concurrent.futures.as_completed(futures, timeout=timeout):
             pass
-        self._futures = []
+        with self._lock:
+            self._futures = []
 
     def refresh_all(self):
         """Force re-download every cached symbol over its full cached range and
@@ -109,10 +112,10 @@ class PrecacheManager:
             path = os.path.join(self._dl.cache_dir, fn)
             try:
                 import pandas as pd
-                first = pd.read_csv(path, usecols=["date"])["date"].iloc[0]
+                first = pd.read_csv(path, usecols=["date"], nrows=1)["date"].iloc[0]
                 start = str(first)[:10]
-            except Exception:  # noqa: BLE001 - fall back to default start
-                pass
+            except Exception as e:  # noqa: BLE001 - fall back to default start
+                print(f"[precache] refresh_all: could not read first date from {fn}: {type(e).__name__}: {e}; using default start {start}")
             self.submit([code], freq=freq, start=start, end=today, adjust=adjust)
 
     def shutdown(self):

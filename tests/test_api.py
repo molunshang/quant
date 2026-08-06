@@ -107,10 +107,36 @@ def test_precache_api_submit_and_query(monkeypatch):
     assert r2.json()["job"]["symbol"] == "600519"
 
 
-def test_daily_update_scheduler(monkeypatch, tmp_path):
-    from api.main import _start_daily_scheduler, _should_run_now
-    cfg_path = tmp_path / "data.json"
-    cfg_path.write_text('{"daily_update_time": "15:30"}')
-    monkeypatch.setenv("QUANT_DATA_CONFIG", str(cfg_path))
-    # _should_run_now 在 15:30 返回 True
-    assert _should_run_now("15:30") in (True, False)  # 依赖当前时间
+def test_daily_update_scheduler(monkeypatch):
+    import api.main as main
+    from api.main import _read_data_config, _should_run_now
+
+    # _read_data_config reads the real config/data.json (daily_update_time present)
+    cfg = _read_data_config()
+    assert isinstance(cfg, dict)
+    assert "daily_update_time" in cfg
+
+    # _should_run_now deterministically, via a fixed fake clock
+    class FakeDatetime:
+        now_value = None
+        @classmethod
+        def now(cls):
+            return cls.now_value
+    monkeypatch.setattr(main, "datetime", FakeDatetime)
+
+    FakeDatetime.now_value = _fixed_datetime("15:30")
+    assert _should_run_now("15:30") is True
+    FakeDatetime.now_value = _fixed_datetime("09:00")
+    assert _should_run_now("15:30") is False
+
+
+def _fixed_datetime(hhmm: str):
+    import datetime as _dt
+    hh, mm = hhmm.split(":")
+    return _dt.datetime(2026, 1, 1, int(hh), int(mm), 0)
+
+
+def test_precache_job_non_int_returns_404():
+    r = client.get("/api/data/precache/abc")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "unknown job"
