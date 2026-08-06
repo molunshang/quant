@@ -16,7 +16,7 @@ V8 崩溃（`py_mini_racer`）以**原生信号级崩溃**形式杀进程（`exi
 | 1 | 覆盖范围 | **所有原生崩溃** + **普通 Python 异常**（非仅 V8） |
 | 2 | 日志位置 | 项目内 `data/logs/crash.log` |
 | 3 | 文件组织 | 单文件 + 轮转（`RotatingFileHandler`，max 10MB × 5） |
-| 4 | 原生崩溃 | `faulthandler.register()` 注册 `SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGTRAP`，`all_threads=True`，崩溃时 dump 所有线程栈 |
+| 4 | 原生崩溃 | `faulthandler.enable(file=...)` 覆盖 `SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE` + `faulthandler.register(SIGTRAP, file=...)` 补上 SIGTRAP（V8 崩溃信号），全部 `all_threads=True`，崩溃时 dump 所有线程栈到 crash.log |
 | 5 | Python 异常 | `sys.excepthook` 兜底未捕获异常（含线程内异常、precache job error），带时间戳 + traceback |
 | 6 | 初始化时机 | `api/main.py` 模块顶部调用 `init_crash_logging()`，早于任何业务代码 |
 | 7 | 依赖 | 全标准库（`logging` + `faulthandler`），不引入额外依赖 |
@@ -54,11 +54,13 @@ tests/test_crash_log.py  (新增) 验证初始化、excepthook 写入、轮转�
    - `backupCount = 5`
    - `encoding = "utf-8"`（日志含中文）
 3. 设置 `logging.basicConfig(handlers=[handler], level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")`，挂到 **root logger**（`force=True`，避免 uvicorn 重复初始化）。
-4. **`faulthandler.register(signal, file=handler.stream, all_threads=True)`**：
-   - 注册 `SIGSEGV`、`SIGABRT`、`SIGBUS`、`SIGILL`、`SIGTRAP`；
+4. **`faulthandler.enable(file=handler.stream, all_threads=True)`**：
+   - 覆盖 `SIGSEGV`、`SIGABRT`、`SIGBUS`、`SIGILL`、`SIGFPE`；
    - 崩溃时 dump **所有线程**的 Python 栈（含 C 扩展的调用点，如 `py_mini_racer._make_context`）；
    - `handler.stream` 指向 RotatingFileHandler 已打开的日志文件，崩溃 dump 直接追加写入。
-5. **`sys.excepthook = _excepthook`**：
+5. **`faulthandler.register(SIGTRAP, file=handler.stream, all_threads=True)`**：
+   - **SIGTRAP 不被 `enable()` 覆盖**（已验证），但它是 V8 崩溃（`exit 133`）的确切信号，必须单独注册补上。
+6. **`sys.excepthook = _excepthook`**：
    - 拦截未捕获异常，`logging.critical(...)` 写时间戳 + `traceback.format_exc()`；
    - 同时**调用默认 excepthook**（保留 stderr 输出，不吞异常）。
 
@@ -77,7 +79,7 @@ tests/test_crash_log.py  (新增) 验证初始化、excepthook 写入、轮转�
 | `api/agent/api.py` | `_run()` 的 `except Exception` | `bus.publish` 错误 + 存 chat 记录 | 补 `logging.exception("chat run failed")` |
 | `data/precache.py` | `_work()` 的 `except Exception` | 只写 job 状态 + error 字符串 | 补 `logging.exception("precache job {job.id} failed")` |
 
-### 2. `api/main.py` 集成
+### 3. `api/main.py` 集成
 
 模块顶部（`import` 后、定义 `app` 前）调用：
 
@@ -96,13 +98,15 @@ init_crash_logging()
 | `test_excepthook_writes_traceback` | 手动触发 `sys.excepthook`，验证 crash.log 含 traceback |
 | `test_excepthook_preserves_default` | 自定义 excepthook 调用后，默认 excepthook 仍被调用（不吞异常） |
 | `test_rotating_handler_configured` | root logger 有 `RotatingFileHandler`，`maxBytes`/`backupCount` 正确 |
-| `test_faulthandler_registered` | `faulthandler` 的信号处理函数已注册（`faulthandler.is_enabled()` 或检查注册表） |
+| `test_faulthandler_enabled` | `faulthandler.is_enabled()` 为 True（`enable()` 已生效） |
+| `test_faulthandler_sigtrap_registered` | SIGTRAP 无法再被 `register()`（已由我们注册，覆盖成功） |
+| `test_dump_traceback_writes_to_file` | `faulthandler.dump_traceback(file=handler.stream)` 软 dump 写入 crash.log（不杀进程） |
 
 **原生崩溃捕获无法单测**（会真的杀掉 pytest 进程）。用 `faulthandler.dump_traceback()`（软 dump，不杀进程）验证 dump 机制写入日志文件。
 
 ## 约束与风险
 
-1. **原生崩溃 dump 时机**：`faulthandler.register` 在信号到达时由 C 层同步执行，dump 到 `RotatingFileHandler.stream`（已打开的文件句柄）。进程随后立即死，但 dump 已落盘。已验证 V8 崩溃场景下能 dump 5757 行全线程栈（含 `py_mini_racer._make_context`）。
+1. **原生崩溃 dump 时机**：`faulthandler.enable` + `faulthandler.register(SIGTRAP)` 在信号到达时由 C 层同步执行，dump 到 `RotatingFileHandler.stream`（已打开的文件句柄）。进程随后立即死，但 dump 已落盘。已验证 V8 崩溃场景下能 dump 5757 行全线程栈（含 `py_mini_racer._make_context`）。**`SIGTRAP` 是 V8 崩溃（exit 133）的确切信号，`enable()` 不覆盖它，必须单独 `register`。**
 2. **`force=True` 的 `basicConfig`**：统一 root logger 到 crash.log。uvicorn 访问日志（`uvicorn.access`）是独立 logger，不受影响；`uvicorn.error` 会进 crash.log。**决定：保持简单，不做特殊保留。**
 3. **线程内异常**：Python 线程内的未捕获异常**不会**走 `sys.excepthook`（它只处理主线程）。当前代码里线程内异常已被 try/except 包裹（`api/agent/api.py` 的 `_run`、`data/precache.py` 的 `_work`），**本次给这两处补 `logging.exception()`**，线程内异常也进 crash.log。
 4. **轮转与并发**：`RotatingFileHandler` 非线程安全，多线程并发写可能丢失尾部。对 crash 场景（低频、致命）可接受；如需严格可加 `threading.Lock`，本次保持简单。
