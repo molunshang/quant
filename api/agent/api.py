@@ -39,11 +39,17 @@ def handle_chat(session_id, message, goal, provider, bus, session_store, chat_st
         goal_dict = json.loads(row["goal_json"]) if row.get("goal_json") else {}
         session_store.set(session_id, "running")
         bus.publish(session_id, {"type": "running"})
-        agent = LLMAgent(provider=provider, store=store, executor=executor)
-        report = agent.run(session_id, format_goal_text(goal_dict), goal=goal_dict, bus=bus)
-        chat_store.add_message(session_id, "assistant", report.get("report", ""))
-        session_store.set(session_id, "done")
-        return {"outcome": "running", "report": report}
+        try:
+            agent = LLMAgent(provider=provider, store=store, executor=executor)
+            report = agent.run(session_id, format_goal_text(goal_dict), goal=goal_dict, bus=bus)
+            chat_store.add_message(session_id, "assistant", report.get("report", ""))
+            session_store.set(session_id, "done")
+            return {"outcome": "running", "report": report}
+        except Exception:
+            # 运行异常 -> 回到 pending_confirm，避免会话永久卡在 running
+            session_store.set(session_id, "pending_confirm",
+                              confirm_summary_json=row.get("confirm_summary_json"))
+            raise
 
     if status in ("idle", "done", "pending_clarify", "pending_confirm"):
         # 新目标 / 澄清答复 / 确认单上的修改意见 -> 走提取+step+挂起

@@ -6,7 +6,7 @@
 
 - **自定义策略**：策略即 `strategy(ctx, params)` Python 函数，通过 API 提交源码或引用内置策略（AST 沙箱校验，拒绝 import / 私有访问）
 - **Web 可视化**：权益曲线、回撤曲线、K线买卖点标记（ECharts）
-- **AI 目标优化 Agent**：用自然语言设定目标（年化收益 / 超额 / 最大回撤），LLM 自主选标的、写策略、跑回测、校验是否达标并发布；Web 聊天面板实时流式进度（SSE）
+- **AI 目标优化 Agent**：用自然语言设定目标（年化收益 / 超额 / 最大回撤），LLM 自主选标的、写策略、跑回测、校验是否达标并发布；目标不明确时先澄清、执行前先确认（目标门卫）；Web 聊天面板实时流式进度（SSE）
 - **多 LLM 后端**：Anthropic + OpenAI 兼容多 Provider（可接 DeepSeek / Qwen 等），Web 面板在线配置、测试连接、设默认
 - **策略草稿 → 发布 + 版本管理**：迭代中的策略为草稿，达标才发布，记录指标快照，SQLite 持久化
 - **多标的**：股票、基金、ETF
@@ -74,7 +74,7 @@ python3 -m venv .venv
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/chat` | 提交目标，后台启动 Agent 循环 |
+| POST | `/api/chat` | 提交目标 → 澄清/确认后启动 Agent 循环（目标门卫） |
 | GET  | `/api/chat/events` | SSE 实时进度流 |
 | GET  | `/api/chat/sessions` | 会话列表 |
 | GET  | `/api/providers` | 可用 provider 名列表 |

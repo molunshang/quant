@@ -13,8 +13,9 @@ from dataclasses import asdict, dataclass
 DEFAULT_PERIOD = {"start": "2020-01-01", "end": "2024-12-31"}
 DEFAULT_BENCHMARK = "沪深300 绝对收益"
 
-_CONFIRM_WORDS = ("确认", "没问题", "可以", "开始", "好", "OK", "对", "是的", "就这样", "同意", "行")
+_CONFIRM_WORDS = ("确认", "没问题", "可以", "开始", "好", "ok", "对", "是的", "就这样", "同意", "行")
 _SUFFIXES = ("吧", "的", "了", "呢", "啊", "呀", "嘛")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass
@@ -70,7 +71,7 @@ def build_confirmation_summary(extraction: GoalExtraction) -> dict:
 
 
 def is_confirmed(text: str) -> bool:
-    t = re.sub(r"[\s！!。，,？?：:；;]", "", text.strip())
+    t = re.sub(r"[\s！!。，,？?：:；;]", "", text.strip()).lower()
     if not t:
         return False
     if t in _CONFIRM_WORDS:
@@ -179,7 +180,7 @@ def _coerce_constraints(value) -> dict[str, float] | None:
             if not m:
                 continue
             num = float(m.group(1))
-            if "%" in v and abs(num) > 1:
+            if "%" in v:
                 num /= 100.0
         else:
             continue
@@ -194,6 +195,8 @@ def _coerce_period(value) -> dict[str, str] | None:
         return None
     start = value.get("start")
     end = value.get("end")
-    if isinstance(start, str) and isinstance(end, str) and start and end:
-        return {"start": start, "end": end}
+    if isinstance(start, str) and isinstance(end, str):
+        start, end = start.strip(), end.strip()
+        if _DATE_RE.match(start) and _DATE_RE.match(end):
+            return {"start": start, "end": end}
     return None

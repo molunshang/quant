@@ -105,6 +105,11 @@ def test_is_confirmed_rejects_modification():
         assert not is_confirmed(w), w
 
 
+def test_is_confirmed_ok_lowercase():
+    assert is_confirmed("ok")
+    assert is_confirmed("Ok")
+
+
 def test_format_confirmation_text_contains_default_marks():
     s = build_confirmation_summary(GoalExtraction(universe=["沪深300"], constraints={"annual_return": 0.10}))
     text = format_confirmation_text(s)
@@ -200,6 +205,39 @@ def test_gate_extract_string_percent_coerced():
     ex = gate_extract("年化10%回撤15%", [], provider)
     assert ex.constraints["annual_return"] == 0.10
     assert ex.constraints["max_drawdown"] == -0.15
+
+
+def test_gate_extract_small_percent_coerced():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(
+        text='{"constraints": {"annual_return": "1%", "max_drawdown": "0.5%"}}', tool_uses=[])])
+    ex = gate_extract("年化1%回撤0.5%", [], provider)
+    assert ex.constraints["annual_return"] == 0.01
+    assert ex.constraints["max_drawdown"] == -0.005
+
+
+def test_gate_extract_positive_drawdown_negated():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(
+        text='{"constraints": {"max_drawdown": 0.15}}', tool_uses=[])])
+    ex = gate_extract("回撤15%", [], provider)
+    assert ex.constraints["max_drawdown"] == -0.15
+
+
+def test_gate_extract_period_invalid_shape_dropped():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(
+        text='{"period": {"start": "2020", "end": "2024"}}', tool_uses=[])])
+    ex = gate_extract("2020到2024", [], provider)
+    assert ex.period is None  # invalid shape -> fall back to default
+
+
+def test_gate_extract_period_strips_whitespace():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(
+        text='{"period": {"start": " 2020-01-01 ", "end": " 2024-12-31 "}}', tool_uses=[])])
+    ex = gate_extract("2020到2024", [], provider)
+    assert ex.period == {"start": "2020-01-01", "end": "2024-12-31"}
 
 
 def test_gate_extract_merges_goal_and_history():

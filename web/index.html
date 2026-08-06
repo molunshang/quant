@@ -404,8 +404,8 @@ function chatConnect(sessionId) {
       chatStatus.textContent = '已确认，开始执行…';
       chatSend.disabled = true;
     }
-    else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); }
-    else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); }
+    else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); chatSend.disabled = false; }
+    else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); chatSend.disabled = false; }
   };
   chatES.onerror = () => { chatStatus.textContent = '连接中断，重连中…'; };
 }
