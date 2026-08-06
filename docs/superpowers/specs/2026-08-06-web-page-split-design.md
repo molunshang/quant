@@ -32,6 +32,7 @@ web/
 
 - `/web` 静态挂载保留，用于加载 `common.css` / `common.js`。
 - 新增三个 GET 路由，各自 `FileResponse` 返回对应页面。`/` 路由保持不变。
+- 四个页面路由（含 `/`）均注册在 `if WEB_DIR.exists():` 块内，与现状一致。
 
 **验证**：`GET /`、`/chat`、`/data`、`/settings` 均返回 200 且 `Content-Type` 含 `text/html`。
 
@@ -39,7 +40,7 @@ web/
 
 | 页面 | 内容 |
 |------|------|
-| **回测**（index.html） | 左侧设置：标的/类型/频率/日期/复权/初始资金/策略（内置/自定义源码切换）/参数 JSON；运行按钮；右侧结果区：指标卡片、权益/K线/回撤三图 Tab、交易记录表。含原有 `runBacktest`、`renderResults`、三个 `build*Option` 与 `chart` 函数。 |
+| **回测**（index.html） | 左侧设置：标的/类型/频率/日期/复权/初始资金/策略（内置/自定义源码切换）/参数 JSON；运行按钮；右侧结果区：指标卡片、权益/K线/回撤三图 Tab、交易记录表。含原有 `runBacktest`、`renderResults`、三个 `build*Option` 与 `chart` 函数。原页面中的聊天（chatPanel）、LLM（llmPanel）、预缓存（precachePanel）三块面板整体移除，迁移至各自页面。 |
 | **聊天**（chat.html） | 聊天日志、provider 下拉（`/api/providers`）、输入框、发送按钮、SSE 事件处理（turn/tool/tool_error/backtest_results/clarify/confirm/running/error/done）、断线恢复输入框。 |
 | **数据**（data.html） | 预缓存表单（标的/频率/日期/复权）、提交、刷新已缓存按钮、任务列表（3 秒轮询 `/api/data/precache/jobs`）。 |
 | **设置**（settings.html） | Provider 列表（设默认/测试/编辑/删除）、增改表单、设默认；`loadLlmProviders`、`fillLlmForm`、`saveLlmProvider`、`testLlmForm` 等逻辑全部平移。 |
