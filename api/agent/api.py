@@ -13,7 +13,7 @@ from .config import ConfigError, ProviderConfigStore
 from .gate import (
     format_confirmation_text, format_goal_text, gate_extract, gate_step, is_confirmed,
 )
-from .store import ChatStore, StrategyStore
+from .store import AgentSessionStore, ChatStore, StrategyStore
 
 
 def handle_chat(session_id, message, goal, provider, bus, session_store, chat_store, store, executor) -> dict:
@@ -76,6 +76,7 @@ def register_agent_routes(app: FastAPI) -> None:
     chat_store = ChatStore()
     executor = BacktestExecutor()
     config = ProviderConfigStore()  # {name: LLMProvider} cache, reloaded on every write
+    session_store = AgentSessionStore()
 
     @app.post("/api/chat")
     def chat(body: dict):
@@ -98,14 +99,13 @@ def register_agent_routes(app: FastAPI) -> None:
             default = config.get_default()
             provider = providers.get(default) if default else next(iter(providers.values()))
 
-        agent = LLMAgent(provider=provider, store=store, executor=executor)
         chat_store.add_message(session_id, "system", f"目标: {goal or message}")
 
         def _run():
             try:
-                report = agent.run(session_id, message, goal=goal, bus=bus)
-                chat_store.add_message(session_id, "assistant", report.get("report", ""))
-            except Exception as e:  # noqa: BLE001 - surface errors to the user, no eternal spinner
+                handle_chat(session_id, message, goal, provider, bus,
+                            session_store, chat_store, store, executor)
+            except Exception as e:  # noqa: BLE001 - surface errors, no eternal spinner
                 bus.publish(session_id, {"type": "error", "error": str(e)})
                 chat_store.add_message(session_id, "assistant", f"出错了: {e}")
 

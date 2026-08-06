@@ -329,3 +329,20 @@ def test_handle_chat_rejects_when_running(tmp_path):
     assert out["outcome"] == "error"
     assert out["reason"] == "running"
     assert any("正在运行中" in e.get("error", "") for e in _events_of_type(bus, "error"))
+
+
+def test_chat_endpoint_still_returns_session(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from api.agent.api import register_agent_routes
+
+    cfg_path = tmp_path / "llm.json"
+    cfg_path.write_text('{"default": null, "providers": []}', encoding="utf-8")
+    monkeypatch.setenv("QUANT_LLM_CONFIG", str(cfg_path))
+    app = FastAPI()
+    register_agent_routes(app)
+    client = TestClient(app)
+    # 无 provider -> 400，与旧行为一致
+    r = client.post("/api/chat", json={"message": "hi"})
+    assert r.status_code == 400
+    assert "provider" in r.json()["detail"]
