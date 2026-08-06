@@ -5,50 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A股回测系统</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="/web/common.css">
 <style>
-:root { --bg:#0f1419; --panel:#1a1f27; --border:#2a313b; --text:#e6e9ef; --muted:#8a94a6; --accent:#4c9ffe; --green:#4caf50; --red:#f44336; }
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }
-.header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--border); }
-.header h1 { font-size:18px; }
-.header .sub { color:var(--muted); font-size:13px; }
-.main { display:flex; gap:16px; padding:16px 24px; }
+/* 回测页独有布局样式（共享样式在 /web/common.css） */
 .controls { width:320px; flex-shrink:0; display:flex; flex-direction:column; gap:12px; }
-.panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; }
-.panel h3 { font-size:14px; margin-bottom:10px; color:var(--muted); font-weight:500; }
-label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
-input, select, textarea { width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:8px 10px; font-size:13px; }
-textarea { font-family:ui-monospace, Menlo, monospace; font-size:12px; resize:vertical; }
-.btn { width:100%; padding:10px; border:none; border-radius:6px; background:var(--accent); color:#fff; font-size:14px; cursor:pointer; font-weight:600; }
-.btn:hover { filter:brightness(1.1); }
-.btn:disabled { opacity:.5; cursor:not-allowed; }
-.content { flex:1; display:flex; flex-direction:column; gap:16px; min-width:0; }
-.metrics { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:12px; }
-.metric { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px; }
-.metric .label { font-size:12px; color:var(--muted); }
-.metric .value { font-size:20px; font-weight:700; margin-top:4px; }
-.metric .value.pos { color:var(--green); } .metric .value.neg { color:var(--red); }
-.chart { background:var(--panel); border:1px solid var(--border); border-radius:8px; }
-.chart div { width:100%; height:320px; }
-.tabs { display:flex; gap:8px; margin-bottom:0; }
-.tab { padding:8px 16px; border-radius:6px 6px 0 0; background:var(--panel); border:1px solid var(--border); border-bottom:none; cursor:pointer; font-size:13px; color:var(--muted); }
-.tab.active { background:var(--accent); color:#fff; }
-.trades { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; max-height:260px; overflow:auto; }
-table { width:100%; border-collapse:collapse; font-size:12px; }
-th, td { padding:6px 10px; text-align:left; border-bottom:1px solid var(--border); }
-th { color:var(--muted); font-weight:500; }
-.buy { color:var(--red); } .sell { color:var(--green); }
-.status { font-size:12px; color:var(--muted); margin-top:8px; min-height:16px; }
-.hidden { display:none; }
 .strat-src { display:none; }
 #strategyType { margin-bottom:4px; }
 </style>
 </head>
-<body>
-<div class="header">
-  <h1>📈 A股回测系统</h1>
-  <div class="sub">股票 · 基金 · ETF &nbsp;|&nbsp; 自定义策略 · Agent API</div>
-</div>
+<body data-page="backtest">
+<header class="header">
+  <div>
+    <h1>📈 A股回测系统</h1>
+    <div class="sub">股票 · 基金 · ETF &nbsp;|&nbsp; 自定义策略 · Agent API</div>
+  </div>
+  <nav class="nav">
+    <a href="/" class="nav-link" data-page="backtest">回测</a>
+    <a href="/chat" class="nav-link" data-page="chat">AI 优化</a>
+    <a href="/data" class="nav-link" data-page="data">数据预缓存</a>
+    <a href="/settings" class="nav-link" data-page="settings">LLM 设置</a>
+  </nav>
+</header>
 
 <div class="main">
   <!-- ===== 左侧控制面板 ===== -->
@@ -128,67 +105,8 @@ th { color:var(--muted); font-weight:500; }
   </div>
 </div>
 
-<div class="panel" id="chatPanel">
-  <h3>🤖 AI 目标优化</h3>
-  <div id="chatLog" style="max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;background:var(--bg);"></div>
-  <label for="chatProvider">模型</label>
-  <select id="chatProvider"></select>
-  <label for="chatInput">目标 / 指令</label>
-  <input id="chatInput" placeholder="例如：在沪深300上做到年化收益10%、回撤小于15%">
-  <button id="chatSend" class="btn">发送</button>
-  <div id="chatStatus" class="status"></div>
-</div>
-
-<div class="panel" id="llmPanel">
-  <h3>⚙️ LLM 设置</h3>
-  <div id="llmProviderList" style="border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;margin-bottom:8px;"></div>
-  <label for="llmName">名称</label>
-  <input id="llmName">
-  <label for="llmType">类型</label>
-  <select id="llmType">
-    <option value="anthropic">anthropic</option>
-    <option value="openai_compat">openai_compat</option>
-  </select>
-  <label for="llmBaseUrl">base_url（openai_compat 必填）</label>
-  <input id="llmBaseUrl" placeholder="http://127.0.0.1:3456">
-  <label for="llmModel">模型</label>
-  <input id="llmModel" placeholder="opengo/deepseek-v4-flash">
-  <label for="llmApiKey">API Key（env:VAR 或明文）</label>
-  <input id="llmApiKey" placeholder="env:ANTHROPIC_API_KEY">
-  <div style="margin-top:8px;">
-    <button id="llmSave" class="btn">保存</button>
-    <button id="llmTestForm" class="btn">测试此配置</button>
-    <span id="llmTestResult" class="status"></span>
-  </div>
-  <div id="llmMsg" class="status"></div>
-</div>
-
-<div class="panel" id="precachePanel">
-  <h3>📦 数据预缓存</h3>
-  <label for="pcSymbols">标的（逗号分隔，如 600519,510300）</label>
-  <input id="pcSymbols" placeholder="600519,510300">
-  <label for="pcFreq">频率</label>
-  <select id="pcFreq">
-    <option value="daily" selected>日线</option>
-  </select>
-  <label for="pcStart">起始日期</label><input id="pcStart" value="2020-01-01">
-  <label for="pcEnd">结束日期</label><input id="pcEnd" value="2024-12-31">
-  <label for="pcAdjust">复权</label>
-  <select id="pcAdjust"><option value="qfq" selected>qfq</option><option value="none">none</option></select>
-  <div style="margin-top:8px;display:flex;gap:8px;">
-    <button id="pcSubmit" class="btn" style="flex:1">预缓存</button>
-    <button id="pcRefresh" class="btn" style="flex:1">刷新已缓存</button>
-  </div>
-  <div id="pcMsg" class="status"></div>
-  <h3 style="font-size:14px;color:var(--muted);margin-top:12px;">任务列表</h3>
-  <table id="pcJobsTable">
-    <thead><tr><th>ID</th><th>标的</th><th>状态</th><th>进度</th><th>错误</th></tr></thead>
-    <tbody></tbody>
-  </table>
-</div>
-
+<script src="/web/common.js"></script>
 <script>
-const $ = id => document.getElementById(id);
 let equityChart, klineChart, drawdownChart;
 
 // ---- load symbols & strategies ----
@@ -215,224 +133,6 @@ async function loadStrategies() {
     sel.appendChild(opt);
   });
 }
-
-const chatLog = document.getElementById('chatLog');
-const chatInput = document.getElementById('chatInput');
-const chatProvider = document.getElementById('chatProvider');
-const chatSend = document.getElementById('chatSend');
-const chatStatus = document.getElementById('chatStatus');
-let chatSession = null;
-let chatES = null;
-
-function chatAppend(role, text) {
-  const d = document.createElement('div');
-  d.style.margin = '4px 0';
-  const b = document.createElement('b');
-  b.textContent = `${role}:`;
-  d.appendChild(b);
-  d.appendChild(document.createTextNode(' '));
-  d.appendChild(document.createTextNode(text));
-  chatLog.appendChild(d);
-  chatLog.scrollTop = chatLog.scrollHeight;
-}
-
-async function loadProviders() {
-  const r = await fetch('/api/providers');
-  const data = await r.json();
-  chatProvider.innerHTML = '';
-  data.providers.forEach(n => {
-    const o = document.createElement('option');
-    o.value = n; o.textContent = n;
-    chatProvider.appendChild(o);
-  });
-}
-
-let editingLlm = null;
-
-async function loadLlmProviders() {
-  const r = await fetch('/api/llm/providers/list');
-  if (!r.ok) {
-    const err = await r.json();
-    $('llmProviderList').textContent = '⚠ ' + (err.detail || '加载失败');
-    return;
-  }
-  const data = await r.json();
-  const list = $('llmProviderList');
-  list.innerHTML = '';
-  if (data.error) { list.textContent = '⚠ ' + data.error; return; }
-  if (!data.providers.length) { list.textContent = '（无 provider，请在下表添加）'; return; }
-  data.providers.forEach(p => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);';
-    const def = document.createElement('input');
-    def.type = 'radio'; def.name = 'llmDefault';
-    def.checked = p.name === data.default;
-    def.onclick = () => setLlmDefault(p.name);
-    const label = document.createElement('span');
-    label.style.flex = '1';
-    label.textContent = `${p.name}（${p.type} · ${p.model}${p.base_url ? ' · ' + p.base_url : ''}）`;
-    const testBtn = document.createElement('button');
-    testBtn.className = 'btn'; testBtn.textContent = '测试';
-    testBtn.onclick = async () => {
-      const res = await fetch('/api/llm/providers/test', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p)});
-      const j = await res.json();
-      label.textContent = `${p.name}（${p.type} · ${p.model}${p.base_url ? ' · ' + p.base_url : ''}） ${j.ok ? '✓ 连接成功' : '✗ ' + j.error}`;
-    };
-    const editBtn = document.createElement('button');
-    editBtn.className = 'btn'; editBtn.textContent = '编辑';
-    editBtn.onclick = () => fillLlmForm(p);
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn'; delBtn.textContent = '删除';
-    delBtn.onclick = async () => {
-      if (!confirm(`删除 provider ${p.name}?`)) return;
-      const res = await fetch('/api/llm/providers/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:p.name})});
-      const j = await res.json();
-      if (res.ok) { $('llmMsg').textContent = '已删除'; loadLlmProviders(); loadProviders(); }
-      else { $('llmMsg').textContent = j.detail || '删除失败'; }
-    };
-    row.append(def, label, testBtn, editBtn, delBtn);
-    list.appendChild(row);
-  });
-}
-
-function fillLlmForm(p) {
-  editingLlm = p.name;
-  $('llmName').value = p.name;
-  $('llmType').value = p.type;
-  $('llmBaseUrl').value = p.base_url || '';
-  $('llmModel').value = p.model || '';
-  $('llmApiKey').value = p.api_key || '';
-}
-
-async function setLlmDefault(name) {
-  const res = await fetch('/api/llm/default/set', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name})});
-  if (!res.ok) { const j = await res.json(); $('llmMsg').textContent = j.detail || '设置失败'; }
-  loadLlmProviders();
-}
-
-function llmFormData() {
-  return {
-    name: $('llmName').value.trim(),
-    type: $('llmType').value,
-    base_url: $('llmBaseUrl').value.trim(),
-    model: $('llmModel').value.trim(),
-    api_key: $('llmApiKey').value.trim(),
-  };
-}
-
-async function saveLlmProvider() {
-  const url = editingLlm ? '/api/llm/providers/update' : '/api/llm/providers/add';
-  const body = llmFormData();
-  if (editingLlm) body.name = editingLlm;
-  const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  const j = await res.json();
-  if (res.ok) {
-    editingLlm = null;
-    $('llmName').value = ''; $('llmBaseUrl').value = ''; $('llmModel').value = ''; $('llmApiKey').value = '';
-    $('llmMsg').textContent = '已保存';
-    loadLlmProviders();
-    loadProviders();
-  } else {
-    $('llmMsg').textContent = j.detail || '保存失败';
-  }
-}
-
-async function testLlmForm() {
-  $('llmTestResult').textContent = '测试中…';
-  const res = await fetch('/api/llm/providers/test', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(llmFormData())});
-  const j = await res.json();
-  $('llmTestResult').textContent = j.ok ? '✓ 连接成功' : '✗ ' + j.error;
-}
-
-$('llmSave').addEventListener('click', saveLlmProvider);
-$('llmTestForm').addEventListener('click', testLlmForm);
-loadLlmProviders();
-
-// ---- data precache panel ----
-const $p = id => document.getElementById(id);
-$p('pcSubmit').addEventListener('click', async () => {
-  const symbols = $p('pcSymbols').value.split(',').map(s => s.trim()).filter(Boolean);
-  if (!symbols.length) { $p('pcMsg').textContent = '请填写标的'; return; }
-  const res = await fetch('/api/data/precache', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      symbols, freq: $p('pcFreq').value,
-      start: $p('pcStart').value, end: $p('pcEnd').value, adjust: $p('pcAdjust').value
-    })
-  });
-  const data = await res.json();
-  $p('pcMsg').textContent = data.job_ids ? `已提交 ${data.job_ids.length} 个任务` : (data.detail || '失败');
-  loadPrecacheJobs();
-});
-$p('pcRefresh').addEventListener('click', async () => {
-  await fetch('/api/data/precache/refresh', {method: 'POST'});
-  $p('pcMsg').textContent = '已触发刷新';
-});
-
-async function loadPrecacheJobs() {
-  const res = await fetch('/api/data/precache/jobs');
-  const data = await res.json();
-  const tbody = $p('pcJobsTable').querySelector('tbody');
-  tbody.innerHTML = data.jobs.map(j => `
-    <tr><td>${j.id}</td><td>${j.symbol}</td><td>${j.status}</td>
-    <td>${j.progress}%</td><td>${j.error || ''}</td></tr>`).join('');
-}
-setInterval(loadPrecacheJobs, 3000);
-loadPrecacheJobs();
-
-function chatConnect(sessionId) {
-  if (chatES) chatES.close();
-  chatES = new EventSource(`/api/chat/events?session_id=${sessionId}`);
-  chatES.onmessage = (e) => {
-    const ev = JSON.parse(e.data);
-    if (ev.type === 'turn') { chatStatus.textContent = `第 ${ev.turn} 轮…`; }
-    else if (ev.type === 'tool') { chatAppend('系统', `调用 ${ev.name}`); }
-    else if (ev.type === 'tool_error') { chatAppend('系统', `⚠ ${ev.name}: ${ev.error}`); }
-    else if (ev.type === 'backtest_results') { chatAppend('系统', '✅ 回测结果已返回'); }
-    else if (ev.type === 'clarify') {
-      chatAppend('系统', '🤔 需要澄清：' + (ev.questions || []).join('；'));
-      chatStatus.textContent = '请回复以澄清';
-      chatSend.disabled = false;
-    }
-    else if (ev.type === 'confirm') {
-      chatAppend('系统', ev.text || '请确认目标');
-      chatStatus.textContent = '请确认或修改后回复';
-      chatSend.disabled = false;
-    }
-    else if (ev.type === 'running') {
-      chatStatus.textContent = '已确认，开始执行…';
-      chatSend.disabled = true;
-    }
-    else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); chatSend.disabled = false; }
-    else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); chatSend.disabled = false; }
-  };
-  chatES.onerror = () => {
-    chatStatus.textContent = '连接中断，重连中…';
-    // 传输失败时恢复输入框：服务端事件流断线不会发 done/error 来恢复按钮
-    chatSend.disabled = false;
-  };
-}
-
-async function sendChat() {
-  const msg = chatInput.value.trim();
-  if (!msg) return;
-  chatInput.value = '';
-  chatAppend('用户', msg);
-  chatStatus.textContent = '思考中…';
-  chatSend.disabled = true;
-  const r = await fetch('/api/chat', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ message: msg, provider: chatProvider.value, session_id: chatSession }),
-  });
-  const data = await r.json();
-  chatSession = data.session_id;
-  chatConnect(chatSession);
-  chatSend.disabled = false;
-}
-chatSend.addEventListener('click', sendChat);
-chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
-loadProviders();
 
 $('symbolType').addEventListener('change', loadSymbols);
 $('strategyType').addEventListener('change', () => {
