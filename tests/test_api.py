@@ -140,3 +140,10 @@ def test_precache_job_non_int_returns_404():
     r = client.get("/api/data/precache/abc")
     assert r.status_code == 404
     assert r.json()["detail"] == "unknown job"
+
+
+def test_web_pages():
+    for path in ("/", "/chat", "/data", "/settings"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert "text/html" in r.headers["content-type"], path

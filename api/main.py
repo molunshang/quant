@@ -79,6 +79,18 @@ if WEB_DIR.exists():
     def index():
         return FileResponse(str(WEB_DIR / "index.html"))
 
+    @app.get("/chat", include_in_schema=False)
+    def chat_page():
+        return FileResponse(str(WEB_DIR / "chat.html"))
+
+    @app.get("/data", include_in_schema=False)
+    def data_page():
+        return FileResponse(str(WEB_DIR / "data.html"))
+
+    @app.get("/settings", include_in_schema=False)
+    def settings_page():
+        return FileResponse(str(WEB_DIR / "settings.html"))
+
 
 @app.get("/api/health")
 def health():
