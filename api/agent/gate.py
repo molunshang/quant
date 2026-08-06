@@ -112,3 +112,88 @@ def gate_step(extraction: GoalExtraction) -> tuple[str, object]:
     if missing or extraction.followup_question:
         return "clarify", build_questions(missing, extraction)
     return "confirm", build_confirmation_summary(extraction)
+
+
+_GATE_SYSTEM = """你是A股量化回测目标提取器。从用户描述中提取结构化JSON，仅输出JSON对象，不要任何解释。
+
+输出结构：
+{
+  "universe": ["标的范围，如'沪深300成分'、'白酒行业'、'510300'"],
+  "constraints": {"annual_return": 0.10, "max_drawdown": -0.15, "total_return": 0.5, "sharpe": 1.0, "win_rate": 0.6},
+  "period": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"},
+  "benchmark": "基准，如'沪深300'或'绝对收益'",
+  "followup_question": "若目标仍有歧义需要追问用户，写一个问题；否则省略该字段"
+}
+规则：数值一律用小数（10%→0.10；回撤15%→-0.15）。无法从描述确定的字段省略。"""
+
+
+def gate_extract(message: str, history: list[str], provider, goal: str | None = None) -> GoalExtraction:
+    user_text = "\n".join([goal or "", *history, message])
+    resp = provider.complete(
+        system=_GATE_SYSTEM,
+        messages=[{"role": "user", "content": user_text}],
+        tools=[],
+    )
+    data = _parse_json(resp.text or "")
+    return GoalExtraction(
+        universe=_coerce_strings(data.get("universe")),
+        constraints=_coerce_constraints(data.get("constraints")),
+        period=_coerce_period(data.get("period")),
+        benchmark=data.get("benchmark") if isinstance(data.get("benchmark"), str) else None,
+        followup_question=data.get("followup_question") if isinstance(data.get("followup_question"), str) else None,
+    )
+
+
+def _parse_json(text: str) -> dict:
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t)
+    try:
+        data = json.loads(t)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _coerce_strings(value) -> list[str] | None:
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if isinstance(value, list):
+        items = [v.strip() for v in value if isinstance(v, str) and v.strip()]
+        return items or None
+    return None
+
+
+_DRAWDOWN_KEYS = ("max_drawdown",)
+
+
+def _coerce_constraints(value) -> dict[str, float] | None:
+    if not isinstance(value, dict) or not value:
+        return None
+    out = {}
+    for k, v in value.items():
+        if isinstance(v, (int, float)):
+            num = float(v)
+        elif isinstance(v, str):
+            m = re.search(r"(\d+(?:\.\d+)?)", v)
+            if not m:
+                continue
+            num = float(m.group(1))
+            if "%" in v and abs(num) > 1:
+                num /= 100.0
+        else:
+            continue
+        if k in _DRAWDOWN_KEYS and num > 0:
+            num = -num  # 回撤是亏损指标，正值归一为负（spec 全局约束）
+        out[k] = num
+    return out or None
+
+
+def _coerce_period(value) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    start = value.get("start")
+    end = value.get("end")
+    if isinstance(start, str) and isinstance(end, str) and start and end:
+        return {"start": start, "end": end}
+    return None

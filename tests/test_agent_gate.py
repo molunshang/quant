@@ -144,3 +144,69 @@ def test_gate_step_followup_clarifies_even_when_fields_ok():
     name, payload = gate_step(ex)
     assert name == "clarify"
     assert "跑赢大盘" in payload[0]
+
+
+from api.agent.gate import gate_extract
+
+
+class FakeGateProvider:
+    """Returns scripted LLMResponse in order; records calls."""
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = []
+    def complete(self, *, system, messages, tools, model=None, max_tokens=4096):
+        self.calls.append({"system": system, "messages": messages, "tools": tools})
+        if self.script:
+            return self.script.pop(0)
+        return type("R", (), {"text": "完成", "tool_uses": []})()
+
+
+def test_gate_extract_parses_full_goal():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(
+        text='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10, "max_drawdown": -0.15},'
+             ' "period": {"start": "2020-01-01", "end": "2024-12-31"}, "benchmark": "沪深300 绝对收益"}',
+        tool_uses=[])])
+    ex = gate_extract("在沪深300做到年化10%回撤15%", [], provider)
+    assert ex.universe == ["沪深300"]
+    assert ex.constraints["annual_return"] == 0.10
+    assert ex.constraints["max_drawdown"] == -0.15
+    assert ex.period == {"start": "2020-01-01", "end": "2024-12-31"}
+    assert ex.benchmark == "沪深300 绝对收益"
+    assert provider.calls[0]["tools"] == []  # gate is a plain-text LLM call
+
+
+def test_gate_extract_handles_fenced_json():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(
+        text='```json\n{"universe": ["510300"]}\n```', tool_uses=[])])
+    ex = gate_extract("做510300", [], provider)
+    assert ex.universe == ["510300"]
+
+
+def test_gate_extract_malformed_json_degrades_to_empty():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(text="抱歉我不懂", tool_uses=[])])
+    ex = gate_extract("随便", [], provider)
+    assert ex.universe is None
+    assert ex.constraints is None
+
+
+def test_gate_extract_string_percent_coerced():
+    from api.agent.provider import LLMResponse
+    # LLM 输出字符串百分比时兜底转小数；回撤取负值（spec 全局约束）
+    provider = FakeGateProvider([LLMResponse(
+        text='{"constraints": {"annual_return": "10%", "max_drawdown": "15%"}}', tool_uses=[])])
+    ex = gate_extract("年化10%回撤15%", [], provider)
+    assert ex.constraints["annual_return"] == 0.10
+    assert ex.constraints["max_drawdown"] == -0.15
+
+
+def test_gate_extract_merges_goal_and_history():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(text='{"universe": ["沪深300"]}', tool_uses=[])])
+    gate_extract("在沪深300成分内", ["之前说年化10%"], provider, goal="额外目标")
+    content = provider.calls[0]["messages"][0]["content"]
+    assert "额外目标" in content
+    assert "之前说年化10%" in content
+    assert "在沪深300成分内" in content
