@@ -9,7 +9,7 @@ from typing import Generator
 
 from strategies.manager import StrategyManager
 
-from .gate import DEFAULT_PERIOD, format_goal_text
+from .gate import format_goal_text
 from .provider import LLMProvider, LLMResponse, ToolCall
 from .tools import TOOLS, AgentToolContext
 
