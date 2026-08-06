@@ -10,7 +10,64 @@ from fastapi.responses import StreamingResponse
 from .agent import EventBus, LLMAgent
 from .executor import BacktestExecutor
 from .config import ConfigError, ProviderConfigStore
+from .gate import (
+    format_confirmation_text, format_goal_text, gate_extract, gate_step, is_confirmed,
+)
 from .store import ChatStore, StrategyStore
+
+
+def handle_chat(session_id, message, goal, provider, bus, session_store, chat_store, store, executor) -> dict:
+    """Goal-gate state machine dispatch for one user message.
+
+    Returns an outcome dict: {"outcome": "clarify"|"confirm"|"running"|"error", ...}.
+    """
+    row = session_store.get(session_id)
+    status = row["status"] if row else "idle"
+
+    if status == "running":
+        bus.publish(session_id, {"type": "error", "error": "正在运行中，请稍候再试"})
+        return {"outcome": "error", "reason": "running"}
+
+    msgs = [m["content"] for m in chat_store.list_messages(session_id)
+            if m["role"] in ("user", "assistant")]
+    if msgs and msgs[-1] == message:
+        msgs = msgs[:-1]  # current message passed separately to gate_extract
+    history = msgs
+
+    if status == "pending_confirm" and row and is_confirmed(message):
+        # 用户确认 -> 注入确认后的结构化目标，启动现有 agent 循环
+        goal_dict = json.loads(row["goal_json"]) if row.get("goal_json") else {}
+        session_store.set(session_id, "running")
+        bus.publish(session_id, {"type": "running"})
+        agent = LLMAgent(provider=provider, store=store, executor=executor)
+        report = agent.run(session_id, format_goal_text(goal_dict), goal=goal_dict, bus=bus)
+        chat_store.add_message(session_id, "assistant", report.get("report", ""))
+        session_store.set(session_id, "done")
+        return {"outcome": "running", "report": report}
+
+    if status in ("idle", "done", "pending_clarify", "pending_confirm"):
+        # 新目标 / 澄清答复 / 确认单上的修改意见 -> 走提取+step+挂起
+        return _extract_and_advance(session_id, message, history, goal, provider, bus, session_store)
+
+    bus.publish(session_id, {"type": "error", "error": f"未知会话状态: {status}"})
+    return {"outcome": "error", "reason": status}
+
+
+def _extract_and_advance(session_id, message, history, goal, provider, bus, session_store) -> dict:
+    extraction = gate_extract(message, history, provider, goal=goal)
+    step_name, payload = gate_step(extraction)
+    if step_name == "clarify":
+        session_store.set(session_id, "pending_clarify",
+                          goal_json=json.dumps(extraction.to_dict(), ensure_ascii=False),
+                          questions_json=json.dumps(payload, ensure_ascii=False))
+        bus.publish(session_id, {"type": "clarify", "questions": payload})
+        return {"outcome": "clarify", "questions": payload}
+    session_store.set(session_id, "pending_confirm",
+                      goal_json=json.dumps(extraction.to_dict(), ensure_ascii=False),
+                      confirm_summary_json=json.dumps(payload, ensure_ascii=False))
+    text = format_confirmation_text(payload)
+    bus.publish(session_id, {"type": "confirm", "summary": payload, "text": text})
+    return {"outcome": "confirm", "summary": payload}
 
 
 def register_agent_routes(app: FastAPI) -> None:

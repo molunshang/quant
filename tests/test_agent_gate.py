@@ -210,3 +210,122 @@ def test_gate_extract_merges_goal_and_history():
     assert "额外目标" in content
     assert "之前说年化10%" in content
     assert "在沪深300成分内" in content
+
+
+from api.agent.api import handle_chat
+from api.agent.provider import LLMResponse
+from api.agent.store import AgentSessionStore, ChatStore
+
+
+class FakeBus:
+    def __init__(self):
+        self.events = []
+    def publish(self, session_id, event):
+        self.events.append(event)
+
+
+class FakeStore:
+    """Minimal store for LLMAgent (report path only, no tools used)."""
+    def list_strategies(self, include_drafts=True):
+        return []
+    def get_strategy(self, name):
+        return None
+    def get_source(self, name, version=None):
+        return None
+
+
+class FakeExecutor:
+    def submit(self, *a, **k):
+        return 1
+    def wait_all(self, timeout=300):
+        return []
+    def reset_batch(self):
+        pass
+
+
+def _chat(tmp_path):
+    return ChatStore(str(tmp_path / "chat.db"))
+
+
+def _sess(tmp_path):
+    return AgentSessionStore(str(tmp_path / "sess.db"))
+
+
+def _events_of_type(bus, typ):
+    return [e for e in bus.events if e.get("type") == typ]
+
+
+def test_handle_chat_complete_goal_confirms(tmp_path):
+    provider = FakeGateProvider([LLMResponse(text='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10}}', tool_uses=[])])
+    bus = FakeBus()
+    out = handle_chat("s1", "在沪深300做到年化10%", None, provider, bus,
+                      _sess(tmp_path), _chat(tmp_path), FakeStore(), FakeExecutor())
+    assert out["outcome"] == "confirm"
+    assert _events_of_type(bus, "confirm")
+    assert not _events_of_type(bus, "clarify")
+
+
+def test_handle_chat_missing_constraints_clarifies(tmp_path):
+    provider = FakeGateProvider([LLMResponse(text='{"universe": ["沪深300"]}', tool_uses=[])])
+    bus = FakeBus()
+    out = handle_chat("s1", "在沪深300选个好策略", None, provider, bus,
+                      _sess(tmp_path), _chat(tmp_path), FakeStore(), FakeExecutor())
+    assert out["outcome"] == "clarify"
+    ev = _events_of_type(bus, "clarify")[0]
+    assert any("量化目标" in q for q in ev["questions"])
+
+
+def test_handle_chat_answer_then_confirm(tmp_path):
+    sess, chat = _sess(tmp_path), _chat(tmp_path)
+    # handle_chat 不写 chat_store（生产环境由端点写入）；测试手动模拟
+    chat.add_message("s1", "user", "在沪深300")
+    # 第一次：只给了标的 -> clarify
+    p1 = FakeGateProvider([LLMResponse(text='{"universe": ["沪深300"]}', tool_uses=[])])
+    handle_chat("s1", "在沪深300", None, p1, FakeBus(), sess, chat, FakeStore(), FakeExecutor())
+    assert sess.get("s1")["status"] == "pending_clarify"
+    # 第二次：补充约束 -> confirm（history 应含上一条"在沪深300"）
+    chat.add_message("s1", "user", "年化10%")
+    p2 = FakeGateProvider([LLMResponse(text='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10}}', tool_uses=[])])
+    bus2 = FakeBus()
+    out = handle_chat("s1", "年化10%", None, p2, bus2, sess, chat, FakeStore(), FakeExecutor())
+    assert out["outcome"] == "confirm"
+    assert sess.get("s1")["status"] == "pending_confirm"
+    # 提取调用应携带历史（message 不重复）
+    content = p2.calls[0]["messages"][0]["content"]
+    assert content.count("在沪深300") == 1
+    assert "年化10%" in content
+
+
+def test_handle_chat_confirm_runs_agent(tmp_path):
+    sess, chat = _sess(tmp_path), _chat(tmp_path)
+    sess.set("s1", "pending_confirm",
+             goal_json='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10}}')
+    provider = FakeGateProvider([LLMResponse(text="目标达成，已发布", tool_uses=[])])
+    bus = FakeBus()
+    out = handle_chat("s1", "确认", None, provider, bus, sess, chat, FakeStore(), FakeExecutor())
+    assert out["outcome"] == "running"
+    assert _events_of_type(bus, "running")
+    assert sess.get("s1")["status"] == "done"
+    assert chat.list_messages("s1")[-1]["content"] == "目标达成，已发布"
+
+
+def test_handle_chat_confirm_modification_reclarifies(tmp_path):
+    sess, chat = _sess(tmp_path), _chat(tmp_path)
+    sess.set("s1", "pending_confirm",
+             goal_json='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10}}')
+    # 用户说"回撤改成20%" -> 视为修改意见，重新提取
+    provider = FakeGateProvider([LLMResponse(text='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10, "max_drawdown": -0.20}}', tool_uses=[])])
+    bus = FakeBus()
+    out = handle_chat("s1", "回撤改成20%", None, provider, bus, sess, chat, FakeStore(), FakeExecutor())
+    assert out["outcome"] == "confirm"
+    assert not _events_of_type(bus, "running")
+
+
+def test_handle_chat_rejects_when_running(tmp_path):
+    sess, chat = _sess(tmp_path), _chat(tmp_path)
+    sess.set("s1", "running")
+    bus = FakeBus()
+    out = handle_chat("s1", "再来一个", None, FakeGateProvider([]), bus, sess, chat, FakeStore(), FakeExecutor())
+    assert out["outcome"] == "error"
+    assert out["reason"] == "running"
+    assert any("正在运行中" in e.get("error", "") for e in _events_of_type(bus, "error"))
