@@ -407,7 +407,11 @@ function chatConnect(sessionId) {
     else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); chatSend.disabled = false; }
     else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); chatSend.disabled = false; }
   };
-  chatES.onerror = () => { chatStatus.textContent = '连接中断，重连中…'; };
+  chatES.onerror = () => {
+    chatStatus.textContent = '连接中断，重连中…';
+    // 传输失败时恢复输入框：服务端事件流断线不会发 done/error 来恢复按钮
+    chatSend.disabled = false;
+  };
 }
 
 async function sendChat() {

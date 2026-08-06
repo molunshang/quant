@@ -240,6 +240,23 @@ def test_gate_extract_period_strips_whitespace():
     assert ex.period == {"start": "2020-01-01", "end": "2024-12-31"}
 
 
+def test_gate_extract_period_invalid_calendar_dropped():
+    from api.agent.provider import LLMResponse
+    # 形态正确但历法非法（2020-13-99）应回退默认
+    provider = FakeGateProvider([LLMResponse(
+        text='{"period": {"start": "2020-13-99", "end": "2024-01-01"}}', tool_uses=[])])
+    ex = gate_extract("2020到2024", [], provider)
+    assert ex.period is None
+
+
+def test_gate_extract_period_invalid_calendar_end_dropped():
+    from api.agent.provider import LLMResponse
+    provider = FakeGateProvider([LLMResponse(
+        text='{"period": {"start": "2020-01-01", "end": "2024-02-30"}}', tool_uses=[])])
+    ex = gate_extract("2020到2024", [], provider)
+    assert ex.period is None
+
+
 def test_gate_extract_merges_goal_and_history():
     from api.agent.provider import LLMResponse
     provider = FakeGateProvider([LLMResponse(text='{"universe": ["沪深300"]}', tool_uses=[])])

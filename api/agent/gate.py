@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass
+from datetime import date
 
 DEFAULT_PERIOD = {"start": "2020-01-01", "end": "2024-12-31"}
 DEFAULT_BENCHMARK = "沪深300 绝对收益"
@@ -197,6 +198,17 @@ def _coerce_period(value) -> dict[str, str] | None:
     end = value.get("end")
     if isinstance(start, str) and isinstance(end, str):
         start, end = start.strip(), end.strip()
-        if _DATE_RE.match(start) and _DATE_RE.match(end):
+        if _is_valid_date(start) and _is_valid_date(end):
             return {"start": start, "end": end}
     return None
+
+
+def _is_valid_date(s: str) -> bool:
+    """YYYY-MM-DD 且为真实历法日期（拒绝 2020-13-99 / 2024-02-30）。"""
+    if not _DATE_RE.match(s):
+        return False
+    try:
+        date.fromisoformat(s)
+    except ValueError:
+        return False
+    return True
