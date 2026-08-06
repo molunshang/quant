@@ -74,3 +74,10 @@ def test_dump_traceback_writes_to_file():
     faulthandler.dump_traceback(file=handler.stream, all_threads=True)
     handler.flush()
     assert "Current thread" in path.read_text(encoding="utf-8")
+
+
+def test_api_main_imports_init_crash_logging():
+    """Importing api.main must call init_crash_logging (early wiring)."""
+    import api.main  # noqa: F401
+    import data.crash_log as mod
+    assert mod._initialized is True

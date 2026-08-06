@@ -9,6 +9,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
+from data.crash_log import init_crash_logging
+
+# Crash 日志必须在任何业务代码之前初始化：原生崩溃(faulthandler)与
+# Python 未捕获异常都会写进 data/logs/crash.log，便于事后定位。
+init_crash_logging()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
