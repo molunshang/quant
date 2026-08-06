@@ -43,7 +43,6 @@ body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
 .nav-link:hover { color:var(--text); background:var(--panel); }
 .nav-link.active { background:var(--accent); color:#fff; }
 .main { display:flex; gap:16px; padding:16px 24px; }
-.controls { width:320px; flex-shrink:0; display:flex; flex-direction:column; gap:12px; }
 .panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; }
 .panel h3 { font-size:14px; margin-bottom:10px; color:var(--muted); font-weight:500; }
 label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
@@ -70,8 +69,6 @@ th { color:var(--muted); font-weight:500; }
 .buy { color:var(--red); } .sell { color:var(--green); }
 .status { font-size:12px; color:var(--muted); margin-top:8px; min-height:16px; }
 .hidden { display:none; }
-.strat-src { display:none; }
-#strategyType { margin-bottom:4px; }
 ```
 
 - [ ] **Step 2: 创建 `web/common.js`**
@@ -645,7 +642,7 @@ git commit -m "feat: 后端新增 /chat /data /settings 页面路由 + test_web_
 
 **改法说明：** 基于当前 `web/index.html` 手术式裁剪（保留部分原样，不重排）：
 
-1. `<head>`：删掉整个 `<style>` 块（已全部移入 common.css），加 `<link rel="stylesheet" href="/web/common.css">`。保留 ECharts CDN `<script>`。
+1. `<head>`：删掉整个 `<style>` 块（共享样式已移入 common.css；回测页独有布局样式保留为本页 `<style>`），加 `<link rel="stylesheet" href="/web/common.css">`。保留 ECharts CDN `<script>`。
 2. 顶部 `<div class="header">…</div>` 替换为带导航的版本（见 Step 1）。
 3. 删除 `#chatPanel`（131-140 行）、`#llmPanel`（142-164 行）、`#precachePanel`（166-188 行）三个 `<div>`。
 4. `<script>` 内删除：`const $ = …`（common.js 已提供）、`chatLog`~`loadProviders` 一整段（219-248 行）、`editingLlm`~`loadLlmProviders();`（250-349 行）、`$p`~`loadPrecacheJobs();`（351-382 行）、`chatConnect`~`loadProviders();`（384-435 行）。
@@ -663,6 +660,12 @@ git commit -m "feat: 后端新增 /chat /data /settings 页面路由 + test_web_
 <title>A股回测系统</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <link rel="stylesheet" href="/web/common.css">
+<style>
+/* 回测页独有布局样式（共享样式在 /web/common.css） */
+.controls { width:320px; flex-shrink:0; display:flex; flex-direction:column; gap:12px; }
+.strat-src { display:none; }
+#strategyType { margin-bottom:4px; }
+</style>
 </head>
 <body data-page="backtest">
 <header class="header">
