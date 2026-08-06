@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 目标优化 — A股回测系统</title>
+<link rel="stylesheet" href="/web/common.css">
+<style>
+.wrap { max-width:760px; margin:24px auto; padding:0 24px; }
+#chatLog { max-height:320px; overflow:auto; border:1px solid var(--border); border-radius:6px; padding:8px; font-size:12px; background:var(--bg); }
+</style>
+</head>
+<body data-page="chat">
+<header class="header">
+  <div>
+    <h1>📈 A股回测系统</h1>
+    <div class="sub">股票 · 基金 · ETF &nbsp;|&nbsp; 自定义策略 · Agent API</div>
+  </div>
+  <nav class="nav">
+    <a href="/" class="nav-link" data-page="backtest">回测</a>
+    <a href="/chat" class="nav-link" data-page="chat">AI 优化</a>
+    <a href="/data" class="nav-link" data-page="data">数据预缓存</a>
+    <a href="/settings" class="nav-link" data-page="settings">LLM 设置</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <h3>🤖 AI 目标优化</h3>
+    <div id="chatLog"></div>
+    <label for="chatProvider">模型</label>
+    <select id="chatProvider"></select>
+    <label for="chatInput">目标 / 指令</label>
+    <input id="chatInput" placeholder="例如：在沪深300上做到年化收益10%、回撤小于15%">
+    <button id="chatSend" class="btn">发送</button>
+    <div id="chatStatus" class="status"></div>
+  </div>
+</div>
+
+<script src="/web/common.js"></script>
+<script>
+const chatLog = document.getElementById('chatLog');
+const chatInput = document.getElementById('chatInput');
+const chatProvider = document.getElementById('chatProvider');
+const chatSend = document.getElementById('chatSend');
+const chatStatus = document.getElementById('chatStatus');
+let chatSession = null;
+let chatES = null;
+
+function chatAppend(role, text) {
+  const d = document.createElement('div');
+  d.style.margin = '4px 0';
+  const b = document.createElement('b');
+  b.textContent = `${role}:`;
+  d.appendChild(b);
+  d.appendChild(document.createTextNode(' '));
+  d.appendChild(document.createTextNode(text));
+  chatLog.appendChild(d);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function loadProviders() {
+  const r = await fetch('/api/providers');
+  const data = await r.json();
+  chatProvider.innerHTML = '';
+  data.providers.forEach(n => {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n;
+    chatProvider.appendChild(o);
+  });
+}
+
+function chatConnect(sessionId) {
+  if (chatES) chatES.close();
+  chatES = new EventSource(`/api/chat/events?session_id=${sessionId}`);
+  chatES.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'turn') { chatStatus.textContent = `第 ${ev.turn} 轮…`; }
+    else if (ev.type === 'tool') { chatAppend('系统', `调用 ${ev.name}`); }
+    else if (ev.type === 'tool_error') { chatAppend('系统', `⚠ ${ev.name}: ${ev.error}`); }
+    else if (ev.type === 'backtest_results') { chatAppend('系统', '✅ 回测结果已返回'); }
+    else if (ev.type === 'clarify') {
+      chatAppend('系统', '🤔 需要澄清：' + (ev.questions || []).join('；'));
+      chatStatus.textContent = '请回复以澄清';
+      chatSend.disabled = false;
+    }
+    else if (ev.type === 'confirm') {
+      chatAppend('系统', ev.text || '请确认目标');
+      chatStatus.textContent = '请确认或修改后回复';
+      chatSend.disabled = false;
+    }
+    else if (ev.type === 'running') {
+      chatStatus.textContent = '已确认，开始执行…';
+      chatSend.disabled = true;
+    }
+    else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); chatSend.disabled = false; }
+    else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); chatSend.disabled = false; }
+  };
+  chatES.onerror = () => {
+    chatStatus.textContent = '连接中断，重连中…';
+    // 传输失败时恢复输入框：服务端事件流断线不会发 done/error 来恢复按钮
+    chatSend.disabled = false;
+  };
+}
+
+async function sendChat() {
+  const msg = chatInput.value.trim();
+  if (!msg) return;
+  chatInput.value = '';
+  chatAppend('用户', msg);
+  chatStatus.textContent = '思考中…';
+  chatSend.disabled = true;
+  const r = await fetch('/api/chat', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ message: msg, provider: chatProvider.value, session_id: chatSession }),
+  });
+  const data = await r.json();
+  chatSession = data.session_id;
+  chatConnect(chatSession);
+  chatSend.disabled = false;
+}
+chatSend.addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+loadProviders();
+</script>
+</body>
+</html>
