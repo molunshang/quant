@@ -9,11 +9,12 @@ from typing import Generator
 
 from strategies.manager import StrategyManager
 
+from .gate import DEFAULT_PERIOD, format_goal_text
 from .provider import LLMProvider, LLMResponse, ToolCall
 from .tools import TOOLS, AgentToolContext
 
 
-def build_system_prompt(goal: str | None = None) -> str:
+def build_system_prompt(goal: str | dict | None = None) -> str:
     lines = [
         "你是A股量化策略优化助手。用户给出投资目标（如年化收益、超额收益、最大回撤）。",
         "你的工作流程：",
@@ -25,7 +26,20 @@ def build_system_prompt(goal: str | None = None) -> str:
         "工具结果会被合并到下一轮。达成目标后给出简短中文汇报。",
     ]
     if goal:
-        lines.append(f"\n用户目标：{goal}")
+        if isinstance(goal, dict):
+            lines.append(f"\n用户目标：{format_goal_text(goal)}")
+            c = goal.get("constraints") or {}
+            if c:
+                lines.append(f"目标约束（必须满足，check_goal 用这些阈值校验）：{json.dumps(c, ensure_ascii=False)}")
+            if goal.get("universe"):
+                lines.append(f"标的范围（选标的时只在此范围内选择）：{'、'.join(goal['universe'])}")
+            p = goal.get("period")
+            if p:
+                lines.append(f"回测时间区间：{p.get('start')} 至 {p.get('end')}（run_backtest 的 start/end 使用此区间）")
+            if goal.get("benchmark"):
+                lines.append(f"基准：{goal['benchmark']}")
+        else:
+            lines.append(f"\n用户目标：{goal}")
     return "\n".join(lines)
 
 

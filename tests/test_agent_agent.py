@@ -104,6 +104,20 @@ def test_build_system_prompt_contains_goal():
     assert "run_backtest" in p or "回测" in p
 
 
+def test_build_system_prompt_injects_structured_goal():
+    p = build_system_prompt({
+        "universe": ["沪深300"],
+        "constraints": {"annual_return": 0.10, "max_drawdown": -0.15},
+        "period": {"start": "2020-01-01", "end": "2024-12-31"},
+        "benchmark": "沪深300 绝对收益",
+    })
+    assert "沪深300" in p
+    assert "annual_return" in p
+    assert "2020-01-01" in p
+    assert "标的范围" in p
+    assert "必须满足" in p
+
+
 def test_hydrated_manager_resolves_draft_name(monkeypatch, tmp_path):
     """Store drafts reach run_backtest: strategy_ref=<draft name> resolves via the
     hydrated StrategyManager threaded through the BacktestExecutor."""
