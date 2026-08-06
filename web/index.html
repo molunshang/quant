@@ -390,6 +390,20 @@ function chatConnect(sessionId) {
     else if (ev.type === 'tool') { chatAppend('系统', `调用 ${ev.name}`); }
     else if (ev.type === 'tool_error') { chatAppend('系统', `⚠ ${ev.name}: ${ev.error}`); }
     else if (ev.type === 'backtest_results') { chatAppend('系统', '✅ 回测结果已返回'); }
+    else if (ev.type === 'clarify') {
+      chatAppend('系统', '🤔 需要澄清：' + (ev.questions || []).join('；'));
+      chatStatus.textContent = '请回复以澄清';
+      chatSend.disabled = false;
+    }
+    else if (ev.type === 'confirm') {
+      chatAppend('系统', ev.text || '请确认目标');
+      chatStatus.textContent = '请确认或修改后回复';
+      chatSend.disabled = false;
+    }
+    else if (ev.type === 'running') {
+      chatStatus.textContent = '已确认，开始执行…';
+      chatSend.disabled = true;
+    }
     else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); }
     else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); }
   };
