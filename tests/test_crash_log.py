@@ -76,11 +76,31 @@ def test_dump_traceback_writes_to_file():
     assert "Current thread" in path.read_text(encoding="utf-8")
 
 
-def test_api_main_imports_init_crash_logging():
-    """Importing api.main must call init_crash_logging (early wiring)."""
-    import api.main  # noqa: F401
+def test_api_main_imports_init_crash_logging(monkeypatch):
+    """Importing api.main must call init_crash_logging at module top."""
+    import importlib
     import data.crash_log as mod
-    assert mod._initialized is True
+
+    calls = {"n": 0}
+    real_init = mod.init_crash_logging
+
+    def recorder():
+        calls["n"] += 1
+        return real_init()
+
+    monkeypatch.setattr(mod, "init_crash_logging", recorder)
+    monkeypatch.setattr(mod, "_initialized", False)
+
+    # If api.main was already imported in this session, `import api.main` is a
+    # no-op; reload forces the module-level init_crash_logging() call to run
+    # with the recorder in place (it resolves through data.crash_log's module
+    # attribute, which monkeypatch replaced).
+    already_imported = "api.main" in sys.modules
+    import api.main  # noqa: F401
+    if already_imported:
+        importlib.reload(api.main)
+
+    assert calls["n"] >= 1, "api.main must call init_crash_logging() at import time"
 
 
 def test_precache_work_logs_exception(monkeypatch, tmp_path):

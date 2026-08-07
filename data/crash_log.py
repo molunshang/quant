@@ -10,16 +10,32 @@ import logging
 import os
 import signal
 import sys
-import traceback
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
-_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "logs")
-_LOG_FILE = os.path.join(_LOG_DIR, "crash.log")
+_LOG_DIR = str(Path(__file__).resolve().parent.parent / "data" / "logs")
+_LOG_FILE = str(Path(_LOG_DIR) / "crash.log")
 _MAX_BYTES = 10 * 1024 * 1024
 _BACKUP_COUNT = 5
 _FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
 _initialized = False
+
+
+class _CrashLogHandler(RotatingFileHandler):
+    """RotatingFileHandler that keeps faulthandler pointed at the live file
+    across rollovers (rotation closes the old fd faulthandler was bound to)."""
+
+    def _rearm(self) -> None:
+        # Native crashes: SIGSEGV/ABRT/BUS/ILL/FPE dump all-threads stacks via enable().
+        faulthandler.enable(file=self.stream, all_threads=True)
+        # SIGTRAP is the V8/py_mini_racer crash signal (exit 133); enable() does not
+        # cover it, so register it explicitly to the same log file.
+        faulthandler.register(signal.SIGTRAP, file=self.stream, all_threads=True)
+
+    def doRollover(self) -> None:
+        super().doRollover()
+        self._rearm()
 
 
 def _excepthook(exc_type, exc_value, exc_tb):
@@ -35,19 +51,14 @@ def init_crash_logging() -> str:
         return _LOG_FILE
 
     os.makedirs(_LOG_DIR, exist_ok=True)
-    handler = RotatingFileHandler(
+    handler = _CrashLogHandler(
         _LOG_FILE, maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8"
     )
     logging.basicConfig(
         handlers=[handler], level=logging.WARNING,
         format=_FORMAT, force=True,
     )
-
-    # Native crashes: SIGSEGV/ABRT/BUS/ILL/FPE dump all-threads stacks via enable().
-    faulthandler.enable(file=handler.stream, all_threads=True)
-    # SIGTRAP is the V8/py_mini_racer crash signal (exit 133); enable() does not
-    # cover it, so register it explicitly to the same log file.
-    faulthandler.register(signal.SIGTRAP, file=handler.stream, all_threads=True)
+    handler._rearm()
 
     sys.excepthook = _excepthook
 
