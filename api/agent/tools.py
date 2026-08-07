@@ -9,11 +9,12 @@ from strategies.manager import StrategyManager
 
 
 class AgentToolContext:
-    def __init__(self, store, executor, data_layer=None, strategy_manager=None):
+    def __init__(self, store, executor, data_layer=None, strategy_manager=None, session_id=None):
         self.store = store
         self.executor = executor
         self.data_layer = data_layer
         self.strategy_manager = strategy_manager or StrategyManager()
+        self.session_id = session_id
 
 
 def _json(obj) -> str:
@@ -53,6 +54,8 @@ def register_strategy(input_: dict, ctx: AgentToolContext) -> str:
     source = input_["source"]
     validate_strategy_source(source)  # AST sandbox — raises on invalid
     rec = ctx.store.register_draft(name, source, input_.get("description", ""))
+    if ctx.session_id:
+        ctx.store.link_session_strategy(ctx.session_id, name, rec["version"])
     return _json(rec)
 
 

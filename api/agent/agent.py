@@ -105,10 +105,11 @@ class EventBus:
 
 
 class LLMAgent:
-    def __init__(self, provider, store, executor, max_turns=10, max_tools_per_turn=5):
+    def __init__(self, provider, store, executor, chat_store=None, max_turns=10, max_tools_per_turn=5):
         self.provider = provider
         self.store = store
         self.executor = executor
+        self.chat_store = chat_store
         self.max_turns = max_turns
         self.max_tools_per_turn = max_tools_per_turn
         self._manager = StrategyManager()
@@ -138,7 +139,8 @@ class LLMAgent:
         }[name]
 
     def run(self, session_id: str, user_message: str, goal: str | None = None,
-            bus: EventBus | None = None) -> dict:
+            bus: EventBus | None = None, message_id: int | None = None) -> dict:
+        self._ctx.session_id = session_id
         system = build_system_prompt(goal or user_message)
         # messages: user goal first, then alternating assistant tool_calls / user
         # tool_results as the loop runs. These are PROVIDER-NEUTRAL shapes; each
@@ -171,13 +173,17 @@ class LLMAgent:
                         "tool_use_id": tc.id, "content": out, "is_error": False,
                     })
                     if bus:
-                        bus.publish(session_id, {"type": "tool", "name": tc.name, "output": out})
+                        bus.publish(session_id, {"type": "tool", "name": tc.name, "output": out, "input": tc.input})
+                    if self.chat_store is not None and message_id is not None:
+                        self.chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, out, is_error=False)
                 except Exception as e:  # noqa: BLE001 - tool error surfaced to LLM
                     tool_results.append({
                         "tool_use_id": tc.id, "content": f"ERROR: {e}", "is_error": True,
                     })
                     if bus:
-                        bus.publish(session_id, {"type": "tool_error", "name": tc.name, "error": str(e)})
+                        bus.publish(session_id, {"type": "tool_error", "name": tc.name, "error": str(e), "input": tc.input})
+                    if self.chat_store is not None and message_id is not None:
+                        self.chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, str(e), is_error=True)
             # Hydrate AFTER tool execution and BEFORE wait_all: a strategy
             # registered in THIS turn (register_strategy) must resolve when its
             # run_backtest jobs hit the executor's worker threads.

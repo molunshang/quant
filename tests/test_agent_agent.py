@@ -38,10 +38,13 @@ class FakeStore:
     def __init__(self):
         self.drafts = {}
         self.published = []
+        self.linked = []
     def register_draft(self, name, source, description=""):
         v = len(self.drafts.get(name, [])) + 1
         self.drafts[name] = [source]
-        return {"name": name, "version": v, "status": "draft"}
+        return {"name": name, "version": v, "status": "draft", "strategy_id": v}
+    def link_session_strategy(self, session_id, name, version):
+        self.linked.append((session_id, name, version))
     def get_strategy(self, name):
         if name not in self.drafts:
             return None
@@ -62,6 +65,19 @@ class FakeBus:
         self.events = []
     def publish(self, session_id, event):
         self.events.append(event)
+
+
+class FakeChatStore:
+    def __init__(self):
+        self.calls = []
+    def add_tool_call(self, session_id, message_id, turn, name, input, output, is_error):
+        self.calls.append({
+            "session_id": session_id, "message_id": message_id, "turn": turn,
+            "name": name, "input": input, "output": output, "is_error": 1 if is_error else 0,
+        })
+        return len(self.calls)
+    def list_tool_calls(self, session_id):
+        return [c for c in self.calls if c["session_id"] == session_id]
 
 
 def test_agent_loops_until_publish():
@@ -412,3 +428,69 @@ def test_wait_all_error_publishes_error_event_and_returns_report():
     assert "executor boom" in report["report"]
     assert report.get("error") == "executor boom"
     assert any(ev.get("type") == "error" and "executor boom" in ev.get("error", "") for ev in bus.events)
+
+
+def test_agent_records_tool_calls():
+    provider = FakeProvider([
+        LLMResponse(text=None, tool_uses=[
+            ToolCall(id="1", name="register_strategy",
+                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
+            ToolCall(id="2", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+        ]),
+        LLMResponse(text="完成", tool_uses=[]),
+    ])
+    chat = FakeChatStore()
+    bus = FakeBus()
+    agent = LLMAgent(provider=provider, store=FakeStore(), executor=FakeExecutor(),
+                     chat_store=chat, max_turns=5, max_tools_per_turn=5)
+    agent.run("s1", "做年化10%", message_id=7, bus=bus)
+    calls = chat.list_tool_calls("s1")
+    assert len(calls) == 2
+    assert calls[0]["name"] == "register_strategy"
+    assert calls[0]["message_id"] == 7
+    assert calls[0]["turn"] == 0
+    assert calls[0]["input"]["name"] == "ma"
+    assert calls[0]["is_error"] == 0
+    assert calls[1]["name"] == "run_backtest"
+    # SSE 的 tool 事件携带完整 input，前端可实时展开
+    tool_evs = [e for e in bus.events if e.get("type") == "tool"]
+    assert tool_evs[0]["name"] == "register_strategy"
+    assert tool_evs[0]["input"]["name"] == "ma"
+
+
+def test_agent_records_tool_error():
+    provider = FakeProvider([
+        LLMResponse(text=None, tool_uses=[
+            ToolCall(id="1", name="publish_strategy", input={"name": "ma", "goal_met": False}),
+        ]),
+        LLMResponse(text="完成", tool_uses=[]),
+    ])
+    chat = FakeChatStore()
+    agent = LLMAgent(provider=provider, store=FakeStore(), executor=FakeExecutor(),
+                     chat_store=chat, max_turns=5, max_tools_per_turn=5)
+    agent.run("s1", "做年化10%", message_id=7, bus=FakeBus())
+    calls = chat.list_tool_calls("s1")
+    assert len(calls) == 1
+    assert calls[0]["name"] == "publish_strategy"
+    assert calls[0]["is_error"] == 1
+    assert "goal not met" in calls[0]["output"]
+
+
+def test_agent_links_strategy_to_session(tmp_path):
+    from api.agent.store import StrategyStore
+    store = StrategyStore(db_path=str(tmp_path / "t.db"))
+    chat = FakeChatStore()
+    provider = FakeProvider([
+        LLMResponse(text=None, tool_uses=[
+            ToolCall(id="1", name="register_strategy",
+                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
+        ]),
+        LLMResponse(text="完成", tool_uses=[]),
+    ])
+    agent = LLMAgent(provider=provider, store=store, executor=FakeExecutor(),
+                     chat_store=chat, max_turns=5, max_tools_per_turn=5)
+    agent.run("s1", "注册 ma", message_id=3, bus=FakeBus())
+    linked = store.list_session_strategies("s1")
+    assert len(linked) == 1
+    assert linked[0]["name"] == "ma"
+    assert linked[0]["version"] == 1
