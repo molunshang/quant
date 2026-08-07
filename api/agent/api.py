@@ -17,7 +17,8 @@ from .gate import (
 from .store import AgentSessionStore, ChatStore, StrategyStore
 
 
-def handle_chat(session_id, message, goal, provider, bus, session_store, chat_store, store, executor) -> dict:
+def handle_chat(session_id, message, goal, provider, bus, session_store, chat_store, store, executor,
+                message_id=None) -> dict:
     """Goal-gate state machine dispatch for one user message.
 
     Returns an outcome dict: {"outcome": "clarify"|"confirm"|"running"|"error", ...}.
@@ -41,8 +42,9 @@ def handle_chat(session_id, message, goal, provider, bus, session_store, chat_st
         session_store.set(session_id, "running")
         bus.publish(session_id, {"type": "running"})
         try:
-            agent = LLMAgent(provider=provider, store=store, executor=executor)
-            report = agent.run(session_id, format_goal_text(goal_dict), goal=goal_dict, bus=bus)
+            agent = LLMAgent(provider=provider, store=store, executor=executor, chat_store=chat_store)
+            report = agent.run(session_id, format_goal_text(goal_dict), goal=goal_dict, bus=bus,
+                               message_id=message_id)
             chat_store.add_message(session_id, "assistant", report.get("report", ""))
             session_store.set(session_id, "done")
             return {"outcome": "running", "report": report}
@@ -77,13 +79,14 @@ def _extract_and_advance(session_id, message, history, goal, provider, bus, sess
     return {"outcome": "confirm", "summary": payload}
 
 
-def register_agent_routes(app: FastAPI) -> None:
-    bus = EventBus()
-    store = StrategyStore()
-    chat_store = ChatStore()
-    executor = BacktestExecutor()
-    config = ProviderConfigStore()  # {name: LLMProvider} cache, reloaded on every write
-    session_store = AgentSessionStore()
+def register_agent_routes(app: FastAPI, bus=None, store=None, chat_store=None, executor=None,
+                          config=None, session_store=None) -> None:
+    bus = bus or EventBus()
+    store = store or StrategyStore()
+    chat_store = chat_store or ChatStore()
+    executor = executor or BacktestExecutor()
+    config = config or ProviderConfigStore()  # {name: LLMProvider} cache, reloaded on every write
+    session_store = session_store or AgentSessionStore()
 
     @app.post("/api/chat")
     def chat(body: dict):
@@ -92,7 +95,7 @@ def register_agent_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail="message required")
         session_id = body.get("session_id") or bus.create_session()
         goal = body.get("goal")
-        chat_store.add_message(session_id, "user", message)
+        msg_id = chat_store.add_message(session_id, "user", message)
 
         provider_name = body.get("provider")
         providers = config.providers()
@@ -111,7 +114,7 @@ def register_agent_routes(app: FastAPI) -> None:
         def _run():
             try:
                 handle_chat(session_id, message, goal, provider, bus,
-                            session_store, chat_store, store, executor)
+                            session_store, chat_store, store, executor, message_id=msg_id)
             except Exception as e:  # noqa: BLE001 - surface errors, no eternal spinner
                 logging.exception("chat run failed for session %s", session_id)
                 bus.publish(session_id, {"type": "error", "error": str(e)})
@@ -134,6 +137,47 @@ def register_agent_routes(app: FastAPI) -> None:
     @app.get("/api/chat/sessions")
     def chat_sessions():
         return {"sessions": chat_store.list_sessions()}
+
+    @app.get("/api/chat/history")
+    def chat_history():
+        sessions = []
+        for sid in chat_store.list_sessions():
+            msgs = chat_store.list_messages(sid)
+            if not msgs:
+                continue
+            first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
+            title = first_user[:30] + ("…" if len(first_user) > 30 else "")
+            row = session_store.get(sid)
+            sessions.append({
+                "session_id": sid,
+                "title": title,
+                "created_at": msgs[0]["created_at"],
+                "updated_at": msgs[-1]["created_at"],
+                "message_count": len(msgs),
+                "strategy_names": [s["name"] for s in store.list_session_strategies(sid)],
+                "status": row["status"] if row else "done",
+            })
+        sessions.sort(key=lambda s: s["updated_at"] or "", reverse=True)
+        return {"sessions": sessions}
+
+    @app.get("/api/chat/sessions/{sid}")
+    def chat_session_detail(sid: str):
+        msgs = chat_store.list_messages(sid)
+        if not msgs:
+            raise HTTPException(status_code=404, detail="unknown session")
+        calls = chat_store.list_tool_calls(sid)
+        by_msg: dict[int, list] = {}
+        for c in calls:
+            by_msg.setdefault(c["message_id"], []).append({
+                "name": c["name"], "input": c["input"], "output": c["output"],
+                "is_error": c["is_error"], "turn": c["turn"],
+            })
+        messages = [
+            {"id": m["id"], "role": m["role"], "content": m["content"], "created_at": m["created_at"],
+             "tool_calls": by_msg.get(m["id"], [])}
+            for m in msgs
+        ]
+        return {"session_id": sid, "messages": messages, "strategies": store.list_session_strategies(sid)}
 
     @app.get("/api/providers")
     def providers_list():
