@@ -7,8 +7,10 @@
 <link rel="stylesheet" href="/web/common.css">
 <style>
 .wrap { max-width:1100px; margin:24px auto; padding:0 24px; }
-.layout { display:flex; gap:16px; align-items:flex-start; }
-#chatHistory { flex:0 0 280px; }
+.layout { display:flex; gap:16px; height: calc(100vh - 140px); align-items: stretch; }
+#chatHistory { flex:0 0 280px; display:flex; flex-direction:column; min-height:0;
+  border-right:1px solid var(--border); padding-right:10px; }
+#historyList { flex:1 1 auto; overflow-y:auto; min-height:0; margin-top:10px; }
 .history-item { padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px; cursor:pointer; font-size:12px; }
 .history-item:hover { background:var(--panel); }
 .history-item.active { border-color:var(--accent); }
@@ -83,6 +85,12 @@ const historyList = document.getElementById('historyList');
 let chatSession = null;
 let chatES = null;
 let historyData = [];
+const HISTORY_PAGE_SIZE = 30;
+let historyPage = 0;
+let historyDone = false;
+let historyLoading = false;
+let historyAutoSelect = true;   // chatNew 时为 false，避免自动选中旧会话
+let historyObserver = null;
 
 function el(tag, cls, text) {
   const d = document.createElement(tag);
@@ -154,32 +162,70 @@ function setStatusFromHistory() {
   else { chatStatus.textContent = ''; chatSend.disabled = false; }
 }
 
-async function loadHistory() {
-  const r = await fetch('/api/chat/history');
-  historyData = (await r.json()).sessions || [];
-  historyList.innerHTML = '';
-  if (!historyData.length) {
-    historyList.appendChild(el('div', 'empty', '暂无历史，点击「新建会话」开始'));
+function appendHistoryItem(s) {
+  const item = el('div', 'history-item');
+  item.dataset.sid = s.session_id;
+  item.appendChild(el('div', 't', s.title || '(无标题)'));
+  const meta = (s.updated_at || '').replace('T', ' ').slice(0, 16)
+    + ' · ' + s.message_count + ' 条'
+    + (s.strategy_names && s.strategy_names.length ? ' · ' + s.strategy_names.join(', ') : '')
+    + ' · ' + s.status;
+  item.appendChild(el('div', 'm', meta));
+  item.addEventListener('click', () => selectSession(s.session_id));
+  const sentinel = document.getElementById('historySentinel');
+  if (sentinel) historyList.insertBefore(item, sentinel);
+  else historyList.appendChild(item);
+  return item;
+}
+
+async function loadHistoryPage() {
+  if (historyLoading || historyDone) return;
+  historyLoading = true;
+  const sentinel = document.getElementById('historySentinel');
+  if (sentinel) sentinel.textContent = '加载中…';
+  let data;
+  try {
+    const r = await fetch('/api/chat/history?offset=' + (historyPage * HISTORY_PAGE_SIZE) + '&limit=' + HISTORY_PAGE_SIZE);
+    data = await r.json();
+  } catch (e) {
+    historyDone = true;
+    if (sentinel) sentinel.textContent = '加载失败';
+    historyLoading = false;
     return;
   }
-  historyData.forEach(s => {
-    const item = el('div', 'history-item');
-    item.dataset.sid = s.session_id;
-    item.appendChild(el('div', 't', s.title || '(无标题)'));
-    const meta = (s.updated_at || '').replace('T', ' ').slice(0, 16)
-      + ' · ' + s.message_count + ' 条'
-      + (s.strategy_names && s.strategy_names.length ? ' · ' + s.strategy_names.join(', ') : '')
-      + ' · ' + s.status;
-    item.appendChild(el('div', 'm', meta));
-    item.addEventListener('click', () => selectSession(s.session_id));
-    historyList.appendChild(item);
-  });
-  markActive(chatSession);
-  if (!chatSession || !historyData.some(x => x.session_id === chatSession)) {
+  const sessions = data.sessions || [];
+  const firstPage = historyPage === 0;
+  sessions.forEach(s => { historyData.push(s); appendHistoryItem(s); });
+  historyPage++;
+  if (!data.has_more) historyDone = true;
+  if (sentinel) sentinel.textContent = historyDone ? '' : '滚动加载更多';
+  if (!historyData.length && historyDone) {
+    historyList.appendChild(el('div', 'empty', '暂无历史，点击「新建会话」开始'));
+  }
+  if (firstPage && historyAutoSelect && !chatSession && historyData.length) {
     selectSession(historyData[0].session_id);
-  } else {
+  }
+  if (chatSession && historyData.some(x => x.session_id === chatSession)) {
     setStatusFromHistory();
   }
+  historyLoading = false;
+}
+
+function loadHistory(autoSelect = true) {
+  historyPage = 0; historyDone = false; historyLoading = false;
+  historyAutoSelect = autoSelect;
+  historyData = [];
+  historyList.innerHTML = '';
+  if (historyObserver) { historyObserver.disconnect(); historyObserver = null; }
+  // 哨兵必须在列表底部（appendHistoryItem 会 insertBefore 它），并在此重建
+  const sentinel = el('div', 'empty', '加载中…');
+  sentinel.id = 'historySentinel';
+  historyList.appendChild(sentinel);
+  historyObserver = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) loadHistoryPage();
+  }, { root: historyList, rootMargin: '100px' });
+  historyObserver.observe(sentinel);
+  return loadHistoryPage();
 }
 
 async function selectSession(sid) {
@@ -296,6 +342,7 @@ chatNew.addEventListener('click', () => {
   chatLog.innerHTML = '';
   document.getElementById('strategies').innerHTML = '';
   markActive(null);
+  loadHistory(false);
   chatStatus.textContent = '新建会话：输入目标开始';
   chatSend.disabled = false;
   chatInput.focus();
