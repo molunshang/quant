@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from api.agent.store import StrategyStore, ChatStore
+from api.agent.store import StrategyStore, ChatStore, AgentSessionStore
 
 
 def test_draft_publish_versions(tmp_path):
@@ -114,3 +114,61 @@ def test_register_draft_returns_strategy_id(tmp_path):
     assert isinstance(r1["strategy_id"], int)
     assert r1["strategy_id"] == r2["strategy_id"]  # 同名策略复用同一 id
     s.close()
+
+
+def test_session_summaries_sorted_and_truncated(tmp_path):
+    c = ChatStore(db_path=str(tmp_path / "t.db"))
+    c.add_message("s2", "user", "旧")
+    c.add_message("s1", "user", "新" * 40)  # 40 字 -> 截断加省略号
+    c.add_message("s1", "assistant", "完成")
+    # 相同秒级时间戳场景：手动对齐 created_at 以触发 tie-breaker
+    c.conn.execute("UPDATE chat_messages SET created_at='2026-01-01T00:00:00.000000+00:00'")
+    c.conn.commit()
+    sums = c.session_summaries(0, 10)
+    # 同秒 -> 依赖 MAX(id) DESC：s1 最后一条 id 更大 -> s1 在前
+    assert [s["session_id"] for s in sums] == ["s1", "s2"]
+    assert sums[0]["message_count"] == 2
+    assert sums[0]["title"].endswith("…")
+    assert len(sums[0]["title"]) == 31
+    assert sums[1]["title"] == "旧"
+
+
+def test_session_summaries_pagination(tmp_path):
+    c = ChatStore(db_path=str(tmp_path / "t.db"))
+    for i in range(5):
+        c.add_message(f"s{i}", "user", f"m{i}")
+    # 用显式 created_at（随 id 递增）消除时间戳随机性，顺序完全确定
+    c.conn.execute(
+        "UPDATE chat_messages SET created_at = printf('2026-01-0%dT00:00:00.000000+00:00', id)"
+    )
+    c.conn.commit()
+    page1 = c.session_summaries(0, 2)
+    page2 = c.session_summaries(2, 2)
+    page3 = c.session_summaries(4, 2)
+    assert [s["session_id"] for s in page1] == ["s4", "s3"]
+    assert [s["session_id"] for s in page2] == ["s2", "s1"]
+    assert [s["session_id"] for s in page3] == ["s0"]
+    assert len(page1) == 2 and len(page2) == 2 and len(page3) == 1
+
+
+def test_list_session_strategy_names_batch(tmp_path):
+    s = StrategyStore(db_path=str(tmp_path / "t.db"))
+    s.register_draft("ma", "def strategy(ctx, p):\n    pass", "sma")
+    s.register_draft("bb", "def strategy(ctx, p):\n    pass", "bb")
+    s.link_session_strategy("s1", "ma", 1)
+    s.link_session_strategy("s1", "bb", 1)
+    s.link_session_strategy("s2", "ma", 1)
+    got = s.list_session_strategy_names(["s1", "s2", "s3"])
+    assert got["s1"] == ["bb", "ma"]  # 按名称排序
+    assert got["s2"] == ["ma"]
+    assert got["s3"] == []
+
+
+def test_get_many(tmp_path):
+    a = AgentSessionStore(db_path=str(tmp_path / "t.db"))
+    a.set("s1", "running", goal_json='{"universe": ["沪深300"]}')
+    a.set("s2", "done")
+    got = a.get_many(["s1", "s2", "s3"])
+    assert got["s1"]["status"] == "running"
+    assert got["s2"]["status"] == "done"
+    assert got["s3"] is None

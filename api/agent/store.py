@@ -9,7 +9,13 @@ import threading
 from datetime import datetime, timezone
 
 DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
-DB_PATH = os.path.join(DB_DIR, "agent.db")
+
+
+def _default_db_path() -> str:
+    return os.environ.get("QUANT_AGENT_DB") or os.path.join(DB_DIR, "agent.db")
+
+
+DB_PATH = _default_db_path()  # 兼容旧引用；构造时请用 _default_db_path() 读取最新环境变量
 
 
 def _now() -> str:
@@ -32,9 +38,9 @@ def _synchronized(method):
 
 class StrategyStore:
     def __init__(self, db_path: str | None = None):
-        os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(db_path or _default_db_path()), exist_ok=True)
         self._lock = threading.RLock()
-        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False, timeout=10)
+        self.conn = sqlite3.connect(db_path or _default_db_path(), check_same_thread=False, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -199,6 +205,22 @@ class StrategyStore:
         ]
 
     @_synchronized
+    def list_session_strategy_names(self, session_ids: list[str]) -> dict[str, list[str]]:
+        if not session_ids:
+            return {}
+        qmarks = ",".join("?" * len(session_ids))
+        rows = self.conn.execute(
+            f"SELECT ss.session_id, s.name FROM session_strategies ss "
+            f"JOIN strategies s ON s.id = ss.strategy_id "
+            f"WHERE ss.session_id IN ({qmarks}) ORDER BY s.name",
+            session_ids,
+        ).fetchall()
+        out: dict[str, list[str]] = {sid: [] for sid in session_ids}
+        for r in rows:
+            out[r["session_id"]].append(r["name"])
+        return out
+
+    @_synchronized
     def get_source(self, name: str, version: int | None = None) -> str | None:
         """Return the `source` of a strategy version, or the latest version's
         source if `version` is None. Returns None if the strategy or version
@@ -256,9 +278,9 @@ class StrategyStore:
 
 class ChatStore:
     def __init__(self, db_path: str | None = None):
-        os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(db_path or _default_db_path()), exist_ok=True)
         self._lock = threading.RLock()
-        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False, timeout=10)
+        self.conn = sqlite3.connect(db_path or _default_db_path(), check_same_thread=False, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -336,6 +358,30 @@ class ChatStore:
         return [r["session_id"] for r in rows]
 
     @_synchronized
+    def session_summaries(self, offset: int, limit: int) -> list[dict]:
+        rows = self.conn.execute("""
+            SELECT session_id,
+                   MAX(id) AS last_id,
+                   MIN(created_at) AS created_at,
+                   MAX(created_at) AS updated_at,
+                   COUNT(*) AS message_count,
+                   (SELECT content FROM chat_messages u
+                     WHERE u.session_id = m.session_id AND u.role = 'user'
+                     ORDER BY u.id LIMIT 1) AS first_user
+            FROM chat_messages m
+            GROUP BY session_id
+            ORDER BY MAX(created_at) DESC, MAX(id) DESC, session_id ASC
+            LIMIT ? OFFSET ?
+        """, (limit, offset)).fetchall()
+        return [{
+            "session_id": r["session_id"],
+            "title": (r["first_user"] or "")[:30] + ("…" if len(r["first_user"] or "") > 30 else ""),
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+            "message_count": r["message_count"],
+        } for r in rows]
+
+    @_synchronized
     def close(self):
         self.conn.close()
 
@@ -347,9 +393,9 @@ class AgentSessionStore:
     the columns explicitly passed; other columns keep their previous values.
     """
     def __init__(self, db_path: str | None = None):
-        os.makedirs(os.path.dirname(db_path or DB_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(db_path or _default_db_path()), exist_ok=True)
         self._lock = threading.RLock()
-        self.conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False, timeout=10)
+        self.conn = sqlite3.connect(db_path or _default_db_path(), check_same_thread=False, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -402,6 +448,21 @@ class AgentSessionStore:
                  merged["confirm_summary_json"], now, session_id),
             )
         self.conn.commit()
+
+    @_synchronized
+    def get_many(self, session_ids: list[str]) -> dict[str, dict | None]:
+        if not session_ids:
+            return {}
+        qmarks = ",".join("?" * len(session_ids))
+        rows = self.conn.execute(
+            f"SELECT session_id, status, goal_json, questions_json, confirm_summary_json, updated_at "
+            f"FROM agent_sessions WHERE session_id IN ({qmarks})",
+            session_ids,
+        ).fetchall()
+        out: dict[str, dict | None] = {sid: None for sid in session_ids}
+        for r in rows:
+            out[r["session_id"]] = dict(r)
+        return out
 
     @_synchronized
     def close(self):
