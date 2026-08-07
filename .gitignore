@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 data/cache/
 data/agent.db
+data/agent.db.bak-*
 *.log
 .DS_Store
 ```
