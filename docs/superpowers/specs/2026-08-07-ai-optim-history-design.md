@@ -152,7 +152,7 @@ chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, str(e)
 ### 7.2 交互细节
 
 - **左栏历史列表**：`/api/chat/history` 渲染；点击某项 → `/api/chat/sessions/{sid}` 渲染右栏
-- **工具调用块**：默认折叠，显示 `调用 register_strategy`；点击展开显示完整输入 JSON + 输出 JSON（`is_error` 标红）
+- **工具调用块**：默认折叠，显示 `调用 register_strategy`；点击展开显示**完整**输入 JSON + 输出 JSON（`is_error` 标红）
 - **产出策略**：显示状态徽标（已发布/草稿）；点击在下方展示该版本源码（`<pre>`）、指标快照（`metrics`）、目标（`goal`）
 - **续聊**：选中会话后底部输入框直接发消息（`session_id` 复用）；goal-gate 状态从 SQLite 恢复
 - **新建会话**：重置 `session_id`，清空右栏时间线
@@ -165,7 +165,7 @@ chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, str(e)
 - 无历史/空会话：`/api/chat/history` 返回 `{sessions: []}`，左栏「暂无历史」，右栏空态引导
 - 续聊未完成会话：见 7.2 状态处理
 - 老库升级：`CREATE TABLE IF NOT EXISTS` 自动建表，无迁移脚本
-- 工具调用超长：`run_backtest` 输出、`register_strategy` 的源码输入都可能很长，入库时对 `input_json`/`output_json` 统一截断（如 20000 字符）
+- 工具调用入参出参**完整保留，不截断**：`run_backtest` 出参、`register_strategy` 源码输入都可能很长，但完整保留对复现/审计有价值。SQLite 适合存大 JSON blob；若后续膨胀再考虑分页/归档
 - 并发写：沿用 `_synchronized`（per-instance RLock）保护新方法
 
 ## 9. 测试
