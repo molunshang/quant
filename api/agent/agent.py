@@ -175,7 +175,10 @@ class LLMAgent:
                     if bus:
                         bus.publish(session_id, {"type": "tool", "name": tc.name, "output": out, "input": tc.input})
                     if self.chat_store is not None and message_id is not None:
-                        self.chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, out, is_error=False)
+                        try:
+                            self.chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, out, is_error=False)
+                        except Exception:  # noqa: BLE001 - 记录失败不影响工具结果与运行
+                            pass
                 except Exception as e:  # noqa: BLE001 - tool error surfaced to LLM
                     tool_results.append({
                         "tool_use_id": tc.id, "content": f"ERROR: {e}", "is_error": True,
@@ -183,7 +186,10 @@ class LLMAgent:
                     if bus:
                         bus.publish(session_id, {"type": "tool_error", "name": tc.name, "error": str(e), "input": tc.input})
                     if self.chat_store is not None and message_id is not None:
-                        self.chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, str(e), is_error=True)
+                        try:
+                            self.chat_store.add_tool_call(session_id, message_id, turn, tc.name, tc.input, str(e), is_error=True)
+                        except Exception:  # noqa: BLE001 - 记录失败不影响工具结果与运行
+                            pass
             # Hydrate AFTER tool execution and BEFORE wait_all: a strategy
             # registered in THIS turn (register_strategy) must resolve when its
             # run_backtest jobs hit the executor's worker threads.

@@ -164,7 +164,7 @@ def register_agent_routes(app: FastAPI, bus=None, store=None, chat_store=None, e
     def chat_session_detail(sid: str):
         msgs = chat_store.list_messages(sid)
         if not msgs:
-            raise HTTPException(status_code=404, detail="unknown session")
+            raise HTTPException(status_code=404, detail="会话不存在")
         calls = chat_store.list_tool_calls(sid)
         by_msg: dict[int, list] = {}
         for c in calls:
