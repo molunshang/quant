@@ -235,6 +235,18 @@ class ChatStore:
             content TEXT NOT NULL,
             created_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS tool_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL REFERENCES chat_messages(id),
+            turn INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            input_json TEXT NOT NULL,
+            output_json TEXT,
+            is_error INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);
         """)
         self.conn.commit()
 
@@ -254,6 +266,31 @@ class ChatStore:
             (session_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    @_synchronized
+    def add_tool_call(self, session_id, message_id, turn, name, input, output, is_error) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO tool_calls (session_id, message_id, turn, name, input_json, output_json, is_error, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (session_id, message_id, turn, name, json.dumps(input, ensure_ascii=False), output,
+             1 if is_error else 0, _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    @_synchronized
+    def list_tool_calls(self, session_id) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, message_id, turn, name, input_json, output_json, is_error, created_at "
+            "FROM tool_calls WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        return [
+            {"id": r["id"], "message_id": r["message_id"], "turn": r["turn"],
+             "name": r["name"], "input": r["input_json"], "output": r["output_json"],
+             "is_error": r["is_error"], "created_at": r["created_at"]}
+            for r in rows
+        ]
 
     @_synchronized
     def list_sessions(self) -> list[str]:

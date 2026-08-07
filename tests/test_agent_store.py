@@ -58,3 +58,24 @@ def test_chat_store_roundtrip(tmp_path):
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert "s1" in c.list_sessions()
     c.close()
+
+
+def test_tool_call_roundtrip(tmp_path):
+    c = ChatStore(db_path=str(tmp_path / "t.db"))
+    mid = c.add_message("s1", "user", "在沪深300做到年化10%")
+    c.add_tool_call("s1", mid, 1, "list_symbols", {"type": "stock"}, '{"symbols": []}', False)
+    c.add_tool_call("s1", mid, 2, "register_strategy",
+                    {"name": "ma", "source": "def strategy(ctx,p): pass"}, '{"version": 1}', True)
+    calls = c.list_tool_calls("s1")
+    assert len(calls) == 2
+    assert calls[0]["message_id"] == mid
+    assert calls[0]["name"] == "list_symbols"
+    assert calls[0]["turn"] == 1
+    assert calls[0]["input"] == '{"type": "stock"}'
+    assert calls[0]["output"] == '{"symbols": []}'
+    assert calls[0]["is_error"] == 0
+    assert calls[1]["is_error"] == 1
+    # 按会话隔离
+    c.add_message("s2", "user", "其他")
+    assert c.list_tool_calls("s2") == []
+    c.close()
