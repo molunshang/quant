@@ -8,6 +8,7 @@ re-fetching.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -15,6 +16,13 @@ from dataclasses import dataclass
 import pandas as pd
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "cache")
+
+# py_mini_racer (V8 JS engine, pulled in by akshare) is not thread-safe:
+# concurrently creating/destroying V8 isolates across threads crashes the whole
+# process with `[FATAL:address_pool_manager.cc(67)] Check failed: !pool->IsInitialized()`.
+# The Sina / fund akshare endpoints we use decrypt via a fresh MiniRacer per call,
+# so every V8-touching call must be serialized process-wide.
+_V8_LOCK = threading.Lock()
 
 # Bars must use these column names downstream.
 OHLCV_COLS = ["open", "high", "low", "close", "volume"]
@@ -128,11 +136,12 @@ class FundSource(DataSource):
     def fetch_daily(self, symbol: SymbolInfo, start: str, end: str, adjust: str = "qfq") -> pd.DataFrame:
         import akshare as ak
 
-        df = ak.fund_open_fund_info_em(symbol=symbol.code, indicator="单位净值走势")
-        df = df.rename(columns={"净值日期": "date", "单位净值": "close"})
-        df["open"] = df["high"] = df["low"] = df["close"]
-        df["volume"] = 0
-        return normalize(df)
+        with _V8_LOCK:  # fund endpoint decrypts via py_mini_racer; not thread-safe
+            df = ak.fund_open_fund_info_em(symbol=symbol.code, indicator="单位净值走势")
+            df = df.rename(columns={"净值日期": "date", "单位净值": "close"})
+            df["open"] = df["high"] = df["low"] = df["close"]
+            df["volume"] = 0
+            return normalize(df)
 
     def fetch_minute(self, symbol: SymbolInfo, start: str, end: str, period: str = "5") -> pd.DataFrame:
         raise NotImplementedError("fund source has no minute data")
@@ -149,18 +158,19 @@ class SinaSource(DataSource):
     def fetch_daily(self, symbol: SymbolInfo, start: str, end: str, adjust: str = "qfq") -> pd.DataFrame:
         import akshare as ak
 
-        adj = {"qfq": "qfq", "hfq": "hfq", "none": ""}.get(adjust, "")
-        # ETFs & indices use the index-daily endpoint; stocks use stock-daily.
-        if symbol.type in ("etf", "index"):
-            df = ak.stock_zh_index_daily(symbol=self._prefixed(symbol))
-            # returns full history; normalize() converts date to string and sorts.
-            # Date-range filtering happens in DataLayer.get_bars cache path.
+        with _V8_LOCK:  # sina endpoints decrypt via py_mini_racer; not thread-safe
+            adj = {"qfq": "qfq", "hfq": "hfq", "none": ""}.get(adjust, "")
+            # ETFs & indices use the index-daily endpoint; stocks use stock-daily.
+            if symbol.type in ("etf", "index"):
+                df = ak.stock_zh_index_daily(symbol=self._prefixed(symbol))
+                # returns full history; normalize() converts date to string and sorts.
+                # Date-range filtering happens in DataLayer.get_bars cache path.
+                return normalize(df)
+            df = ak.stock_zh_a_daily(
+                symbol=self._prefixed(symbol),
+                start_date=start, end_date=end, adjust=adj,
+            )
             return normalize(df)
-        df = ak.stock_zh_a_daily(
-            symbol=self._prefixed(symbol),
-            start_date=start, end_date=end, adjust=adj,
-        )
-        return normalize(df)
 
     def fetch_minute(self, symbol: SymbolInfo, start: str, end: str, period: str = "5") -> pd.DataFrame:
         raise NotImplementedError("sina source has no minute data")

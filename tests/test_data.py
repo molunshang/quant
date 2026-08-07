@@ -175,6 +175,59 @@ def test_get_bars_minute_cache_has_factor(monkeypatch, tmp_path):
     assert list(df2.columns) == ["date", "open", "high", "low", "close", "volume", "factor"]
 
 
+def test_v8_sources_serialize_concurrent_calls(monkeypatch):
+    """Concurrent fetch_daily on V8-backed sources must never overlap inside
+    akshare. py_mini_racer isolates are not thread-safe: churning them in
+    parallel crashes the process (address_pool_manager.cc Check failed)."""
+    import threading
+    import time
+    import akshare as ak
+    from data.sources import FundSource, SinaSource, SymbolInfo
+
+    state = {"active": 0, "max_active": 0}
+
+    def slow(df):
+        state["active"] += 1
+        state["max_active"] = max(state["max_active"], state["active"])
+        time.sleep(0.03)
+        state["active"] -= 1
+        return df
+
+    one_row = pd.DataFrame({
+        "date": ["2024-01-02"], "open": [10.0], "high": [11.0],
+        "low": [9.0], "close": [10.5], "volume": [1000],
+    })
+    monkeypatch.setattr(ak, "stock_zh_a_daily",
+                        lambda symbol, start_date, end_date, adjust: slow(one_row))
+    monkeypatch.setattr(ak, "stock_zh_index_daily",
+                        lambda symbol: slow(one_row))
+    monkeypatch.setattr(ak, "fund_open_fund_info_em",
+                        lambda symbol, indicator: slow(one_row))
+
+    sina = SinaSource()
+    fund = FundSource()
+    stock = SymbolInfo("600519", "茅台", "stock", "sh")
+    etf = SymbolInfo("510300", "沪深300ETF", "etf", "sh")
+    fund_sym = SymbolInfo("161725", "招商中证白酒", "fund", "of")
+
+    def one(src, info):
+        src.fetch_daily(info, "2024-01-01", "2024-01-31", "qfq")
+
+    threads = []
+    for _ in range(4):
+        threads.append(threading.Thread(target=one, args=(sina, stock)))
+        threads.append(threading.Thread(target=one, args=(sina, etf)))
+        threads.append(threading.Thread(target=one, args=(fund, fund_sym)))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert state["max_active"] == 1, (
+        f"V8-backed akshare calls must be serialized (max concurrent was {state['max_active']})"
+    )
+
+
 def test_get_bars_daily_failover_cache_old_format(monkeypatch, tmp_path):
     """A daily failover write must NOT annotate factor=1: the cache stays old
     format (no factor column) so a later get_bars re-downloads through the
