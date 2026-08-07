@@ -6,8 +6,35 @@
 <title>AI 目标优化 — A股回测系统</title>
 <link rel="stylesheet" href="/web/common.css">
 <style>
-.wrap { max-width:760px; margin:24px auto; padding:0 24px; }
-#chatLog { max-height:320px; overflow:auto; border:1px solid var(--border); border-radius:6px; padding:8px; font-size:12px; background:var(--bg); }
+.wrap { max-width:1100px; margin:24px auto; padding:0 24px; }
+.layout { display:flex; gap:16px; align-items:flex-start; }
+#chatHistory { flex:0 0 280px; }
+.history-item { padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px; cursor:pointer; font-size:12px; }
+.history-item:hover { background:var(--panel); }
+.history-item.active { border-color:var(--accent); }
+.history-item .t { font-weight:600; }
+.history-item .m { color:var(--muted); font-size:11px; margin-top:2px; }
+#chatDetail { flex:1 1 auto; min-width:0; }
+#chatLog { max-height:400px; overflow:auto; border:1px solid var(--border); border-radius:6px; padding:8px; font-size:12px; background:var(--bg); }
+.msg { margin:6px 0; }
+.tool-call { margin:4px 0 4px 14px; border:1px solid var(--border); border-radius:4px; }
+.tool-call .tc-head { padding:4px 8px; cursor:pointer; user-select:none; }
+.tool-call .tc-head:hover { background:var(--panel); }
+.tool-call.error .tc-head { color:var(--red); }
+.tool-call .tc-body { display:none; padding:4px 8px; border-top:1px dashed var(--border); }
+.tool-call .tc-body.show { display:block; }
+.tool-call pre { white-space:pre-wrap; word-break:break-all; margin:4px 0; background:var(--panel); padding:6px; border-radius:4px; }
+.tool-call .lbl { color:var(--muted); font-size:11px; }
+#strategies { margin-top:12px; }
+.strategy { margin:4px 0; border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:12px; }
+.strategy .badge { display:inline-block; padding:1px 6px; border-radius:8px; font-size:11px; margin-right:6px; }
+.badge.published { background:var(--green); }
+.badge.draft { background:#e67e22; }
+.strategy pre { white-space:pre-wrap; word-break:break-all; }
+.strategy .sd { display:none; margin-top:6px; }
+.strategy .sd.show { display:block; }
+.strategy button { width:auto; padding:2px 10px; font-size:12px; margin-left:8px; }
+.empty { color:var(--muted); padding:20px; text-align:center; }
 </style>
 </head>
 <body data-page="chat">
@@ -25,15 +52,22 @@
 </header>
 
 <div class="wrap">
-  <div class="panel">
-    <h3>🤖 AI 目标优化</h3>
-    <div id="chatLog"></div>
-    <label for="chatProvider">模型</label>
-    <select id="chatProvider"></select>
-    <label for="chatInput">目标 / 指令</label>
-    <input id="chatInput" placeholder="例如：在沪深300上做到年化收益10%、回撤小于15%">
-    <button id="chatSend" class="btn">发送</button>
-    <div id="chatStatus" class="status"></div>
+  <div class="layout">
+    <aside id="chatHistory">
+      <h3>🤖 AI 目标优化</h3>
+      <button id="chatNew" class="btn">+ 新建会话</button>
+      <div id="historyList" style="margin-top:10px;"></div>
+    </aside>
+    <section id="chatDetail" class="panel">
+      <div id="chatLog"></div>
+      <div id="strategies"></div>
+      <label for="chatProvider">模型</label>
+      <select id="chatProvider"></select>
+      <label for="chatInput">目标 / 指令</label>
+      <input id="chatInput" placeholder="例如：在沪深300上做到年化收益10%、回撤小于15%">
+      <button id="chatSend" class="btn">发送</button>
+      <div id="chatStatus" class="status"></div>
+    </section>
   </div>
 </div>
 
@@ -44,41 +78,145 @@ const chatInput = document.getElementById('chatInput');
 const chatProvider = document.getElementById('chatProvider');
 const chatSend = document.getElementById('chatSend');
 const chatStatus = document.getElementById('chatStatus');
+const chatNew = document.getElementById('chatNew');
+const historyList = document.getElementById('historyList');
 let chatSession = null;
 let chatES = null;
+let historyData = [];
 
-function chatAppend(role, text) {
-  const d = document.createElement('div');
-  d.style.margin = '4px 0';
-  const b = document.createElement('b');
-  b.textContent = `${role}:`;
-  d.appendChild(b);
-  d.appendChild(document.createTextNode(' '));
-  d.appendChild(document.createTextNode(text));
-  chatLog.appendChild(d);
+function el(tag, cls, text) {
+  const d = document.createElement(tag);
+  if (cls) d.className = cls;
+  if (text !== undefined) d.textContent = text;
+  return d;
+}
+
+function chatAppend(role, text, toolCalls) {
+  const m = el('div', 'msg');
+  m.appendChild(el('b', '', role + ':'));
+  m.appendChild(document.createTextNode(' '));
+  m.appendChild(document.createTextNode(text));
+  chatLog.appendChild(m);
+  if (toolCalls && toolCalls.length) renderToolCalls(m, toolCalls);
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-async function loadProviders() {
-  const r = await fetch('/api/providers');
-  const data = await r.json();
-  chatProvider.innerHTML = '';
-  data.providers.forEach(n => {
-    const o = document.createElement('option');
-    o.value = n; o.textContent = n;
-    chatProvider.appendChild(o);
+function toolCallBlock(name, input, output, isError) {
+  const block = el('div', 'tool-call' + (isError ? ' error' : ''));
+  const head = el('div', 'tc-head', (isError ? '⚠ ' : '▸ ') + '调用 ' + name);
+  const body = el('div', 'tc-body');
+  body.appendChild(el('div', 'lbl', '入参（完整）'));
+  body.appendChild(el('pre', '', input));
+  body.appendChild(el('div', 'lbl', '出参（完整）'));
+  body.appendChild(el('pre', '', output === null || output === undefined ? '(无)' : output));
+  head.addEventListener('click', () => body.classList.toggle('show'));
+  block.appendChild(head);
+  block.appendChild(body);
+  return block;
+}
+
+function renderToolCalls(container, calls) {
+  calls.forEach(c => container.appendChild(toolCallBlock(c.name, c.input, c.output, c.is_error)));
+}
+
+function renderStrategies(strategies) {
+  const box = document.getElementById('strategies');
+  box.innerHTML = '';
+  if (!strategies || !strategies.length) return;
+  box.appendChild(el('h3', '', '📋 产出策略'));
+  strategies.forEach(s => {
+    const row = el('div', 'strategy');
+    row.appendChild(el('span', 'badge ' + s.status, s.status === 'published' ? '已发布' : '草稿'));
+    row.appendChild(el('span', '', s.name + ' v' + s.version));
+    const btn = el('button', 'btn', '查看');
+    const sd = el('div', 'sd');
+    if (s.goal) sd.appendChild(el('div', '', '目标: ' + s.goal));
+    if (s.metrics) sd.appendChild(el('div', '', '指标: ' + JSON.stringify(s.metrics)));
+    sd.appendChild(el('div', 'lbl', '源码'));
+    sd.appendChild(el('pre', '', s.source));
+    btn.addEventListener('click', () => sd.classList.toggle('show'));
+    row.appendChild(btn);
+    row.appendChild(sd);
+    box.appendChild(row);
   });
+}
+
+function markActive(sid) {
+  historyList.querySelectorAll('.history-item').forEach(i => i.classList.toggle('active', i.dataset.sid === sid));
+}
+
+function setStatusFromHistory() {
+  const s = (historyData || []).find(x => x.session_id === chatSession);
+  const status = s ? s.status : 'done';
+  if (status === 'running') { chatStatus.textContent = '运行中…'; chatSend.disabled = true; }
+  else if (status === 'pending_clarify') { chatStatus.textContent = '待澄清，请继续输入'; chatSend.disabled = false; }
+  else if (status === 'pending_confirm') { chatStatus.textContent = '待确认，请确认或修改目标'; chatSend.disabled = false; }
+  else { chatStatus.textContent = ''; chatSend.disabled = false; }
+}
+
+async function loadHistory() {
+  const r = await fetch('/api/chat/history');
+  historyData = (await r.json()).sessions || [];
+  historyList.innerHTML = '';
+  if (!historyData.length) {
+    historyList.appendChild(el('div', 'empty', '暂无历史，点击「新建会话」开始'));
+    return;
+  }
+  historyData.forEach(s => {
+    const item = el('div', 'history-item');
+    item.dataset.sid = s.session_id;
+    item.appendChild(el('div', 't', s.title || '(无标题)'));
+    const meta = (s.updated_at || '').replace('T', ' ').slice(0, 16)
+      + ' · ' + s.message_count + ' 条'
+      + (s.strategy_names && s.strategy_names.length ? ' · ' + s.strategy_names.join(', ') : '')
+      + ' · ' + s.status;
+    item.appendChild(el('div', 'm', meta));
+    item.addEventListener('click', () => selectSession(s.session_id));
+    historyList.appendChild(item);
+  });
+  markActive(chatSession);
+  if (!chatSession || !historyData.some(x => x.session_id === chatSession)) {
+    selectSession(historyData[0].session_id);
+  } else {
+    setStatusFromHistory();
+  }
+}
+
+async function selectSession(sid) {
+  chatSession = sid;
+  markActive(sid);
+  await loadDetail(sid);
+}
+
+async function loadDetail(sid) {
+  if (chatES) { chatES.close(); chatES = null; }
+  const r = await fetch('/api/chat/sessions/' + encodeURIComponent(sid));
+  if (r.status === 404) { chatStatus.textContent = '会话不存在'; return; }
+  const data = await r.json();
+  chatLog.innerHTML = '';
+  data.messages.forEach(m => {
+    if (m.role === 'system') return;
+    chatAppend(m.role === 'user' ? '用户' : 'AI', m.content, m.tool_calls);
+  });
+  renderStrategies(data.strategies);
+  setStatusFromHistory();
 }
 
 function chatConnect(sessionId) {
   if (chatES) chatES.close();
-  chatES = new EventSource(`/api/chat/events?session_id=${sessionId}`);
+  chatES = new EventSource('/api/chat/events?session_id=' + sessionId);
   chatES.onmessage = (e) => {
     const ev = JSON.parse(e.data);
-    if (ev.type === 'turn') { chatStatus.textContent = `第 ${ev.turn} 轮…`; }
-    else if (ev.type === 'tool') { chatAppend('系统', `调用 ${ev.name}`); }
-    else if (ev.type === 'tool_error') { chatAppend('系统', `⚠ ${ev.name}: ${ev.error}`); }
-    else if (ev.type === 'backtest_results') { chatAppend('系统', '✅ 回测结果已返回'); }
+    if (ev.type === 'turn') { chatStatus.textContent = '第 ' + ev.turn + ' 轮…'; }
+    else if (ev.type === 'tool') {
+      chatLog.appendChild(toolCallBlock(ev.name, ev.input, ev.output, false));
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+    else if (ev.type === 'tool_error') {
+      chatLog.appendChild(toolCallBlock(ev.name, ev.input, ev.error, true));
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+    else if (ev.type === 'backtest_results') { chatStatus.textContent = '回测完成，继续评估…'; }
     else if (ev.type === 'clarify') {
       chatAppend('系统', '🤔 需要澄清：' + (ev.questions || []).join('；'));
       chatStatus.textContent = '请回复以澄清';
@@ -89,16 +227,25 @@ function chatConnect(sessionId) {
       chatStatus.textContent = '请确认或修改后回复';
       chatSend.disabled = false;
     }
-    else if (ev.type === 'running') {
-      chatStatus.textContent = '已确认，开始执行…';
-      chatSend.disabled = true;
+    else if (ev.type === 'running') { chatStatus.textContent = '已确认，开始执行…'; chatSend.disabled = true; }
+    else if (ev.type === 'error') {
+      chatAppend('系统', '⚠ 出错: ' + ev.error);
+      chatStatus.textContent = '出错';
+      chatES.close(); chatES = null;
+      chatSend.disabled = false;
+      loadHistory();
     }
-    else if (ev.type === 'error') { chatAppend('系统', `⚠ 出错: ${ev.error}`); chatStatus.textContent = '出错'; chatES.close(); chatSend.disabled = false; }
-    else if (ev.type === 'done') { chatAppend('AI', ev.report || '(完成)'); chatStatus.textContent = '完成'; chatES.close(); chatSend.disabled = false; }
+    else if (ev.type === 'done') {
+      chatAppend('AI', ev.report || '(完成)');
+      chatStatus.textContent = '完成';
+      chatES.close(); chatES = null;
+      chatSend.disabled = false;
+      // 服务端先写库再回 done，稍等刷新详情，展示完整持久化的工具调用
+      setTimeout(() => { loadHistory(); loadDetail(chatSession); }, 300);
+    }
   };
   chatES.onerror = () => {
     chatStatus.textContent = '连接中断，重连中…';
-    // 传输失败时恢复输入框：服务端事件流断线不会发 done/error 来恢复按钮
     chatSend.disabled = false;
   };
 }
@@ -113,9 +260,15 @@ async function sendChat() {
   let data;
   try {
     const r = await fetch('/api/chat', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: msg, provider: chatProvider.value, session_id: chatSession }),
     });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      chatStatus.textContent = '⚠ ' + (err.detail || '发送失败');
+      chatSend.disabled = false;
+      return;
+    }
     data = await r.json();
   } catch (e) {
     chatStatus.textContent = '⚠ 发送失败';
@@ -124,12 +277,33 @@ async function sendChat() {
   }
   chatSession = data.session_id;
   chatConnect(chatSession);
-  // 按钮保持禁用，等首个 SSE 事件（running/clarify/confirm/done/error）再恢复；
-  // 断线由 onerror 恢复，避免"思考中"到首个事件之间的空窗被二次提交
 }
+
+async function loadProviders() {
+  const r = await fetch('/api/providers');
+  const data = await r.json();
+  chatProvider.innerHTML = '';
+  data.providers.forEach(n => {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n;
+    chatProvider.appendChild(o);
+  });
+}
+
+chatNew.addEventListener('click', () => {
+  if (chatES) { chatES.close(); chatES = null; }
+  chatSession = null;
+  chatLog.innerHTML = '';
+  document.getElementById('strategies').innerHTML = '';
+  markActive(null);
+  chatStatus.textContent = '新建会话：输入目标开始';
+  chatSend.disabled = false;
+  chatInput.focus();
+});
 chatSend.addEventListener('click', sendChat);
 chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 loadProviders();
+loadHistory();
 </script>
 </body>
 </html>
