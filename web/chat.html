@@ -209,6 +209,7 @@ async function loadHistoryPage() {
     setStatusFromHistory();
   }
   historyLoading = false;
+  if (chatSession) markActive(chatSession);
 }
 
 function loadHistory(autoSelect = true) {
