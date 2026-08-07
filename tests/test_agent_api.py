@@ -43,7 +43,7 @@ def test_chat_history_empty(tmp_path):
     client, *_ = _make_client(tmp_path)
     r = client.get("/api/chat/history")
     assert r.status_code == 200
-    assert r.json() == {"sessions": []}
+    assert r.json() == {"sessions": [], "has_more": False}
 
 
 def test_chat_history_and_detail(tmp_path):
@@ -85,3 +85,24 @@ def test_chat_session_detail_unknown_404(tmp_path):
     client, *_ = _make_client(tmp_path)
     r = client.get("/api/chat/sessions/__nope__")
     assert r.status_code == 404
+
+
+def test_chat_history_pagination(tmp_path):
+    client, store, chat, sess = _make_client(tmp_path)
+    for i in range(5):
+        chat.add_message(f"s{i}", "user", f"目标 {i}")
+    r = client.get("/api/chat/history", params={"offset": 0, "limit": 2})
+    data = r.json()
+    assert len(data["sessions"]) == 2
+    assert data["has_more"] is True
+    assert data["sessions"][0]["session_id"] == "s4"  # 最新在前
+    r2 = client.get("/api/chat/history", params={"offset": 4, "limit": 2})
+    data2 = r2.json()
+    assert len(data2["sessions"]) == 1
+    assert data2["has_more"] is False
+    assert data2["sessions"][0]["session_id"] == "s0"
+    # 非法参数 clamp
+    r3 = client.get("/api/chat/history", params={"offset": -1, "limit": 1000})
+    assert r3.status_code == 200
+    assert len(r3.json()["sessions"]) == 5
+    assert r3.json()["has_more"] is False

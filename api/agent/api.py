@@ -139,26 +139,19 @@ def register_agent_routes(app: FastAPI, bus=None, store=None, chat_store=None, e
         return {"sessions": chat_store.list_sessions()}
 
     @app.get("/api/chat/history")
-    def chat_history():
-        sessions = []
-        for sid in chat_store.list_sessions():
-            msgs = chat_store.list_messages(sid)
-            if not msgs:
-                continue
-            first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
-            title = first_user[:30] + ("…" if len(first_user) > 30 else "")
-            row = session_store.get(sid)
-            sessions.append({
-                "session_id": sid,
-                "title": title,
-                "created_at": msgs[0]["created_at"],
-                "updated_at": msgs[-1]["created_at"],
-                "message_count": len(msgs),
-                "strategy_names": [s["name"] for s in store.list_session_strategies(sid)],
-                "status": row["status"] if row else "done",
-            })
-        sessions.sort(key=lambda s: s["updated_at"] or "", reverse=True)
-        return {"sessions": sessions}
+    def chat_history(offset: int = 0, limit: int = 30):
+        limit = max(1, min(limit, 100))      # clamp
+        offset = max(0, offset)
+        summaries = chat_store.session_summaries(offset, limit)
+        ids = [s["session_id"] for s in summaries]
+        names = store.list_session_strategy_names(ids) if ids else {}
+        rows = session_store.get_many(ids) if ids else {}
+        sessions = [{
+            **s,
+            "strategy_names": names.get(s["session_id"], []),
+            "status": (rows.get(s["session_id"]) or {}).get("status") or "done",
+        } for s in summaries]
+        return {"sessions": sessions, "has_more": len(sessions) == limit}
 
     @app.get("/api/chat/sessions/{sid}")
     def chat_session_detail(sid: str):
