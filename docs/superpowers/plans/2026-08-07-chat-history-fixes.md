@@ -57,13 +57,17 @@ def test_session_summaries_pagination(tmp_path):
     c = ChatStore(db_path=str(tmp_path / "t.db"))
     for i in range(5):
         c.add_message(f"s{i}", "user", f"m{i}")
+    # 用显式 created_at（随 id 递增）消除时间戳随机性，顺序完全确定
+    c.conn.execute(
+        "UPDATE chat_messages SET created_at = printf('2026-01-0%dT00:00:00.000000+00:00', id)"
+    )
+    c.conn.commit()
     page1 = c.session_summaries(0, 2)
     page2 = c.session_summaries(2, 2)
     page3 = c.session_summaries(4, 2)
-    ids1 = [s["session_id"] for s in page1]
-    ids2 = [s["session_id"] for s in page2]
-    ids3 = [s["session_id"] for s in page3]
-    assert ids1 + ids2 + ids3 == sorted(ids1 + ids2 + ids3)  # 互不重叠且覆盖全部
+    assert [s["session_id"] for s in page1] == ["s4", "s3"]
+    assert [s["session_id"] for s in page2] == ["s2", "s1"]
+    assert [s["session_id"] for s in page3] == ["s0"]
     assert len(page1) == 2 and len(page2) == 2 and len(page3) == 1
 
 
@@ -100,8 +104,13 @@ Expected: FAIL（`AttributeError: 'ChatStore' object has no attribute 'session_s
 `api/agent/store.py`：
 
 ```python
-DB_PATH = os.environ.get("QUANT_AGENT_DB") or os.path.join(DB_DIR, "agent.db")
+def _default_db_path() -> str:
+    return os.environ.get("QUANT_AGENT_DB") or os.path.join(DB_DIR, "agent.db")
+
+DB_PATH = _default_db_path()  # 兼容旧引用；构造时请用 _default_db_path() 读取最新环境变量
 ```
+
+三个 store 类（`StrategyStore`、`ChatStore`、`AgentSessionStore`）的 `__init__` 中，所有 `db_path or DB_PATH` 改为 `db_path or _default_db_path()`（每类两处：`os.makedirs(os.path.dirname(...))` 与 `sqlite3.connect(...)`）。这样 `QUANT_AGENT_DB` 在**构造时**读取，即使模块导入早于测试设置环境变量也能生效。
 
 `ChatStore` 新增：
 
@@ -284,6 +293,8 @@ const HISTORY_PAGE_SIZE = 30;
 let historyPage = 0;
 let historyDone = false;
 let historyLoading = false;
+let historyAutoSelect = true;   // chatNew 时为 false，避免自动选中旧会话
+let historyObserver = null;
 ```
 
 替换 `loadHistory` 函数（保持 `selectSession`/`markActive` 等逻辑一致）：
@@ -299,7 +310,9 @@ function appendHistoryItem(s) {
     + ' · ' + s.status;
   item.appendChild(el('div', 'm', meta));
   item.addEventListener('click', () => selectSession(s.session_id));
-  historyList.appendChild(item);
+  const sentinel = document.getElementById('historySentinel');
+  if (sentinel) historyList.insertBefore(item, sentinel);
+  else historyList.appendChild(item);
   return item;
 }
 
@@ -319,56 +332,57 @@ async function loadHistoryPage() {
     return;
   }
   const sessions = data.sessions || [];
-  sessions.forEach(appendHistoryItem);
+  const firstPage = historyPage === 0;
+  sessions.forEach(s => { historyData.push(s); appendHistoryItem(s); });
   historyPage++;
   if (!data.has_more) historyDone = true;
   if (sentinel) sentinel.textContent = historyDone ? '' : '滚动加载更多';
-  if (!historyList.childElementCount && historyDone) {
+  if (!historyData.length && historyDone) {
     historyList.appendChild(el('div', 'empty', '暂无历史，点击「新建会话」开始'));
   }
-  if (!chatSession || !historyData.some(x => x.session_id === chatSession)) {
-    const items = historyList.querySelectorAll('.history-item');
-    if (items.length) selectSession(items[0].dataset.sid);
-  } else {
+  if (firstPage && historyAutoSelect && !chatSession && historyData.length) {
+    selectSession(historyData[0].session_id);
+  }
+  if (chatSession && historyData.some(x => x.session_id === chatSession)) {
     setStatusFromHistory();
   }
   historyLoading = false;
 }
 ```
 
-替换原 `loadHistory` 定义与底部调用：
+替换原 `loadHistory` 定义（哨兵与 observer 在此重建，确保 `innerHTML=''` 后增量加载仍工作）：
 
 ```js
-function loadHistory() {
-  historyPage = 0; historyDone = false;
+function loadHistory(autoSelect = true) {
+  historyPage = 0; historyDone = false; historyLoading = false;
+  historyAutoSelect = autoSelect;
+  historyData = [];
   historyList.innerHTML = '';
-  if (typeof historyObserver !== 'undefined' && historyObserver) historyObserver.disconnect();
+  if (historyObserver) { historyObserver.disconnect(); historyObserver = null; }
+  // 哨兵必须在列表底部（appendHistoryItem 会 insertBefore 它），并在此重建
+  const sentinel = el('div', 'empty', '加载中…');
+  sentinel.id = 'historySentinel';
+  historyList.appendChild(sentinel);
+  historyObserver = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) loadHistoryPage();
+  }, { root: historyList, rootMargin: '100px' });
+  historyObserver.observe(sentinel);
   return loadHistoryPage();
 }
 ```
 
-- [ ] **Step 3: 挂载哨兵 + IntersectionObserver**
+脚本底部原 `loadHistory();` 调用不变（首次进入即建哨兵 + 加载第 1 页）。
 
-在 `loadHistory` 定义之后、`chatNew.addEventListener` 之前插入：
+- [ ] **Step 3: 事件时机调整**
 
-```js
-const historySentinel = el('div', 'empty', '加载中…');
-historySentinel.id = 'historySentinel';
-historyList.appendChild(historySentinel);
-const historyObserver = new IntersectionObserver(entries => {
-  if (entries[0].isIntersecting) loadHistoryPage();
-}, { root: historyList, rootMargin: '100px' });
-historyObserver.observe(historySentinel);
-```
+`chatConnect` 的 `done` 分支与 `error` 分支保留 `loadHistory()`（`loadHistory` 现已重置分页并重建哨兵/observer，行为正确，无需改调用点）。`chatNew` 分支在 `markActive(null)` 后追加 `loadHistory(false)`——**不自动选中**，保持「新建会话」空面板：
 
-- [ ] **Step 4: 调整事件时机**
-
-将 `chatConnect` 的 `done` 分支与 `error` 分支中的 `loadHistory()` 改为 `loadHistory()`（`loadHistory` 现已重置分页，行为正确，无需改调用点）。把 `chatNew` 分支的 `markActive(null)` 后追加 `loadHistory()`（新建会话刷新列表，重置分页）。
-
-`chatNew.addEventListener` 内（`chatInput.focus();` 之前）：
+`chatNew.addEventListener` 内（`markActive(null);` 之后、`chatStatus.textContent` 之前）：
 
 ```js
-  loadHistory();
+  markActive(null);
+  loadHistory(false);
+  chatStatus.textContent = '新建会话：输入目标开始';
 ```
 
 - [ ] **Step 5: 运行前端测试 + 手工验证**
@@ -402,24 +416,19 @@ git commit -m "feat(web): 历史侧栏独立滚动 + 增量加载"
 ```python
 """Test isolation: redirect the default agent DB to a session-scoped shadow DB.
 
-Every store that defaults to data/agent.db (StrategyStore, ChatStore,
-AgentSessionStore) reads QUANT_AGENT_DB. Pointing it at a temp dir here means
-even a test that forgets to inject its own stores can never touch the real
-fact DB.
+Must set QUANT_AGENT_DB at IMPORT time (not in a fixture): api.main and the
+store modules construct their default stores at import time, before any pytest
+fixture runs. Setting it here means even a test that forgets to inject its own
+stores can never touch the real data/agent.db.
 """
 import os
 import tempfile
 
-import pytest
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _shadow_db():
-    tmp = tempfile.mkdtemp(prefix="quant-test-db-")
-    os.environ["QUANT_AGENT_DB"] = os.path.join(tmp, "agent.db")
-    yield
-    os.environ.pop("QUANT_AGENT_DB", None)
+_TMP = tempfile.mkdtemp(prefix="quant-test-db-")
+os.environ["QUANT_AGENT_DB"] = os.path.join(_TMP, "agent.db")
 ```
+
+（`tests/conftest.py` 由 pytest 在任何测试模块导入前加载，因此 `os.environ["QUANT_AGENT_DB"]` 在 `api.main` 导入并构造默认 store 时已生效。）
 
 - [ ] **Step 2: 修改 `tests/test_agent_api.py`**
 
@@ -432,38 +441,35 @@ def test_chat_returns_session(tmp_path, monkeypatch):
     chat = ChatStore(str(tmp_path / "c.db"))
     sess = AgentSessionStore(str(tmp_path / "a.db"))
 
-    # 假 config：一个 provider，且 provider 用 FakeGateProvider（不触发真实 LLM）
-    cfg = ProviderConfigStore(str(tmp_path / "llm.json"))
-    provider = FakeGateProvider([LLMResponse(
-        text='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10}}', tool_uses=[])])
+    # 假 config：写一个 provider 配置，再把 providers() 返回替换为 FakeGateProvider，
+    # 这样 handle_chat -> gate_extract 走假 provider，绝不触发真实 LLM 或网络
     cfg_path = tmp_path / "llm.json"
     cfg_path.write_text(json.dumps({"default": "p1", "providers": [{
         "name": "p1", "type": "openai_compat", "base_url": "http://127.0.0.1:1",
         "model": "m", "api_key": "k"}]}), encoding="utf-8")
-    monkeypatch.setenv("QUANT_LLM_CONFIG", str(cfg_path))
+    cfg = ProviderConfigStore(str(cfg_path))
+    fake = FakeGateProvider([LLMResponse(
+        text='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10}}', tool_uses=[])])
+    cfg.providers = lambda: {"p1": fake}
 
     register_agent_routes(app, store=store, chat_store=chat, session_store=sess,
-                          config=ProviderConfigStore(str(cfg_path)),
-                          executor=FakeExecutor())
+                          config=cfg, executor=FakeExecutor())
     client = TestClient(app)
     r = client.post("/api/chat", json={"message": "做年化10%", "goal": "年化>=10%"})
     assert r.status_code == 200
     assert "session_id" in r.json()
+    # 后台线程落库后再断言消息已持久化到隔离 store
+    import time
+    for _ in range(100):
+        if chat.list_messages(r.json()["session_id"]):
+            break
+        time.sleep(0.05)
+    assert len(chat.list_messages(r.json()["session_id"])) >= 2
 ```
 
-注：`handle_chat` 内 `gate_extract` 通过 `config.providers()` 取 provider 对象——真实 `ProviderConfigStore.providers()` 用 `load_providers` 构建真实 provider。要在不触发网络的情况下走假 provider，直接 `monkeypatch` 注册的 provider 对象：在 `config.providers()` 返回的 dict 中替换为 `FakeGateProvider`。为简化，本步采用「`config.providers()` 返回 FakeGateProvider」的注入方式：
+注：`handle_chat` 内 `gate_extract` 通过 `config.providers()` 取 provider 对象（api.py:101-110），把 `cfg.providers` 替换为返回 `{"p1": fake}` 的 lambda 即可让整条链走假 provider。`FakeExecutor` 为防御性兜底（`_extract_and_advance` 只走 gate，不启动 `LLMAgent` 循环，executor 不实际执行）。
 
-```python
-    cfg = ProviderConfigStore(str(cfg_path))
-    # 把 providers() 的返回替换为假 provider，避免任何真实网络调用
-    orig_providers = cfg.providers
-    def _fake_providers():
-        return {"p1": FakeGateProvider([LLMResponse(
-            text='{"universe": ["沪深300"], "constraints": {"annual_return": 0.10}}', tool_uses=[])])}
-    cfg.providers = _fake_providers
-```
-
-将上述两段合并为最终实现（用 `_fake_providers` 替换 `cfg.providers`，并把 `config=cfg` 传给 `register_agent_routes`）。同时为 `_make_client` 增加 `executor` 注入：
+`_make_client` 保持不变（现有实现已是 tmp_path 隔离；`executor` 默认 `BacktestExecutor()` 不写库，无需隔离，`test_chat_returns_session` 需单独注入 `FakeExecutor`）：
 
 ```python
 def _make_client(tmp_path):
@@ -475,9 +481,7 @@ def _make_client(tmp_path):
     return TestClient(app), store, chat, sess
 ```
 
-（`executor` 默认 `BacktestExecutor()` 不写库，无需隔离；`test_chat_returns_session` 因为要走完整 `/api/chat` → `handle_chat` → gate → agent 循环，需注入假 executor。其余测试直接写 store，不经过 agent 循环。）
-
-修正 `test_providers_endpoint` / `test_published_strategies_endpoint` 用隔离客户端：
+修正 `test_providers_endpoint` / `test_published_strategies_endpoint` 用隔离客户端（去掉 `tmp_path`，改用模块级共享隔离客户端）：
 
 ```python
 def test_providers_endpoint(tmp_path):
@@ -495,15 +499,16 @@ def test_published_strategies_endpoint(tmp_path):
     assert "strategies" in r.json()
 ```
 
-文件顶部补充 import：
+文件顶部补充 import（移除 `from api.main import app`，改为 TestClient 仅从 fastapi.testclient 导入）：
 
 ```python
 import json
+from fastapi.testclient import TestClient
 from api.agent.provider import LLMResponse
 from api.agent.config import ProviderConfigStore
 ```
 
-移除不再使用的模块级 `client = TestClient(app)`（或保留但确保无测试依赖它——建议删除以避免碰全局 app）。确认 `from api.main import app` 仅在需要时保留。
+**删除**模块级 `client = TestClient(app)` 与 `from api.main import app`（全局 app 绑定真实 store；改为每个测试 `_make_client(tmp_path)` 自建隔离客户端）。
 
 - [ ] **Step 3: 修改 `tests/test_agent_gate.py`**
 
