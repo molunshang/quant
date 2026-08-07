@@ -202,12 +202,16 @@ def _make_client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from api.agent.api import register_agent_routes
+    from api.agent.store import AgentSessionStore, ChatStore, StrategyStore
 
     cfg_path = tmp_path / "llm.json"
     cfg_path.write_text('{"providers": []}', encoding="utf-8")
     monkeypatch.setenv("QUANT_LLM_CONFIG", str(cfg_path))
     app = FastAPI()
-    register_agent_routes(app)
+    register_agent_routes(app,
+                          store=StrategyStore(str(tmp_path / "s.db")),
+                          chat_store=ChatStore(str(tmp_path / "c.db")),
+                          session_store=AgentSessionStore(str(tmp_path / "a.db")))
     return TestClient(app), cfg_path
 
 
