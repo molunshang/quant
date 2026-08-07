@@ -79,3 +79,38 @@ def test_tool_call_roundtrip(tmp_path):
     c.add_message("s2", "user", "其他")
     assert c.list_tool_calls("s2") == []
     c.close()
+
+
+def test_link_session_strategy_roundtrip(tmp_path):
+    s = StrategyStore(db_path=str(tmp_path / "t.db"))
+    s.register_draft("ma", "def strategy(ctx, p):\n    pass", "sma")
+    s.publish_version("ma", 1, {"total_return": 0.2}, "年化>=10%")
+    s.link_session_strategy("s1", "ma", 1)
+    rows = s.list_session_strategies("s1")
+    assert len(rows) == 1
+    assert rows[0]["name"] == "ma"
+    assert rows[0]["version"] == 1
+    assert rows[0]["status"] == "published"
+    assert "def strategy" in rows[0]["source"]
+    assert rows[0]["metrics"]["total_return"] == 0.2
+    assert rows[0]["goal"] == "年化>=10%"
+    # 另一会话无关联
+    assert s.list_session_strategies("s2") == []
+    s.close()
+
+
+def test_get_versions_includes_source(tmp_path):
+    s = StrategyStore(db_path=str(tmp_path / "t.db"))
+    s.register_draft("ma", "def strategy(ctx, p):\n    pass v1", "sma")
+    versions = s.get_versions("ma")
+    assert versions[0]["source"] == "def strategy(ctx, p):\n    pass v1"
+    s.close()
+
+
+def test_register_draft_returns_strategy_id(tmp_path):
+    s = StrategyStore(db_path=str(tmp_path / "t.db"))
+    r1 = s.register_draft("ma", "def strategy(ctx, p):\n    pass", "sma")
+    r2 = s.register_draft("ma", "def strategy(ctx, p):\n    pass", "sma v2")
+    assert isinstance(r1["strategy_id"], int)
+    assert r1["strategy_id"] == r2["strategy_id"]  # 同名策略复用同一 id
+    s.close()

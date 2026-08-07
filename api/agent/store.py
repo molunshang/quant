@@ -68,6 +68,13 @@ class StrategyStore:
             content TEXT NOT NULL,
             created_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS session_strategies (
+            session_id TEXT NOT NULL,
+            strategy_id INTEGER NOT NULL REFERENCES strategies(id),
+            version INTEGER NOT NULL,
+            created_at TEXT,
+            PRIMARY KEY (session_id, strategy_id, version)
+        );
         """)
         self.conn.commit()
 
@@ -101,7 +108,7 @@ class StrategyStore:
             "UPDATE strategies SET updated_at = ? WHERE id = ?", (_now(), sid)
         )
         self.conn.commit()
-        return {"name": name, "version": version, "status": "draft"}
+        return {"name": name, "version": version, "status": "draft", "strategy_id": sid}
 
     @_synchronized
     def get_strategy(self, name: str) -> dict | None:
@@ -164,6 +171,34 @@ class StrategyStore:
         return {"name": name, "version": version, "status": "published", "metrics": metrics}
 
     @_synchronized
+    def link_session_strategy(self, session_id, name, version) -> None:
+        sid = self._strategy_id(name)
+        self.conn.execute(
+            "INSERT OR REPLACE INTO session_strategies (session_id, strategy_id, version, created_at) "
+            "VALUES (?,?,?,?)",
+            (session_id, sid, version, _now()),
+        )
+        self.conn.commit()
+
+    @_synchronized
+    def list_session_strategies(self, session_id) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT s.name, v.version, v.status, v.source, v.metrics_json, v.goal "
+            "FROM session_strategies ss "
+            "JOIN strategies s ON s.id = ss.strategy_id "
+            "JOIN strategy_versions v ON v.strategy_id = s.id AND v.version = ss.version "
+            "WHERE ss.session_id = ? ORDER BY ss.created_at, ss.strategy_id, ss.version",
+            (session_id,),
+        ).fetchall()
+        return [
+            {"name": r["name"], "version": r["version"], "status": r["status"],
+             "source": r["source"],
+             "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else None,
+             "goal": r["goal"]}
+            for r in rows
+        ]
+
+    @_synchronized
     def get_source(self, name: str, version: int | None = None) -> str | None:
         """Return the `source` of a strategy version, or the latest version's
         source if `version` is None. Returns None if the strategy or version
@@ -203,6 +238,7 @@ class StrategyStore:
         return [
             {
                 "version": r["version"],
+                "source": r["source"],
                 "status": r["status"],
                 "description": r["description"],
                 "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else None,
