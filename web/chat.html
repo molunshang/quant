@@ -106,7 +106,7 @@ function toolCallBlock(name, input, output, isError) {
   const head = el('div', 'tc-head', (isError ? '⚠ ' : '▸ ') + '调用 ' + name);
   const body = el('div', 'tc-body');
   body.appendChild(el('div', 'lbl', '入参（完整）'));
-  body.appendChild(el('pre', '', input));
+  body.appendChild(el('pre', '', typeof input === 'string' ? input : JSON.stringify(input, null, 2)));
   body.appendChild(el('div', 'lbl', '出参（完整）'));
   body.appendChild(el('pre', '', output === null || output === undefined ? '(无)' : output));
   head.addEventListener('click', () => body.classList.toggle('show'));
