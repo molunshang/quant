@@ -14,14 +14,12 @@ class StrategyRecord:
     source: str | None
     description: str = ""
     builtin: bool = False
-    params_schema: dict | None = None
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
             "description": self.description,
             "builtin": self.builtin,
-            "params_schema": self.params_schema,
         }
 
 
@@ -34,7 +32,6 @@ class StrategyManager:
                 source=meta.get("source"),
                 description=meta.get("description", ""),
                 builtin=True,
-                params_schema=meta.get("params_schema"),
             )
         self._user: dict[str, StrategyRecord] = {}
 
@@ -53,7 +50,7 @@ class StrategyManager:
 
         `strategy` may be:
           - a string name (built-in or previously registered user strategy)
-          - a dict {"name": ..., "source": "def strategy(ctx, params): ..."}
+          - a dict {"name": ..., "source": "def handle_data(ctx): ..."}
         Returns (func, name).
         """
         if isinstance(strategy, str):
