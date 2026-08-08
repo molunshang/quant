@@ -44,13 +44,23 @@ def test_context_combination_api():
     import pandas as pd
     from engine.engine import BacktestEngine, EngineConfig
     from engine.context import Context
+
+    class _FakeDL:
+        def __init__(self, bars):
+            self._bars = bars
+        def symbol_info(self, symbol):
+            from data.sources import SymbolInfo
+            return SymbolInfo(symbol, symbol, "stock", "sh")
+        def get_bars(self, info, freq="daily", start="", end="", adjust="qfq"):
+            return self._bars[info.code]
+
     bars_a = pd.DataFrame({
         "date": pd.date_range("2023-01-02", periods=5, freq="B").strftime("%Y-%m-%d"),
         "open": [100]*5, "high": [101]*5, "low": [99]*5, "close": [100]*5, "volume": [10000]*5,
     })
     eng = BacktestEngine(EngineConfig(initial_cash=100_000))
     ctx = Context(100_000, engine=eng, universe=["600519"], calendar=list(bars_a["date"]),
-                  data_layer=_FakeDataLayer({"600519": bars_a}))
+                  data_layer=_FakeDL({"600519": bars_a}))
     assert ctx.cash == 100_000
     assert ctx.positions == {}
     assert ctx.total_value == 100_000
@@ -107,6 +117,9 @@ class Context:
         self._buy_dates: dict[str, set[str]] = {}
         self._avg_cost: dict[str, float] = {}
         self._symbol_type: dict[str, str] = {}
+        # defaults so ctx.history works even before the engine wires real values
+        self._freq = "daily"
+        self._adjust = "qfq"
 
     # ---- order interface (delegates to engine for A-share rule matching) ----
     def buy(self, symbol: str, pct: float = 1.0) -> bool:
@@ -236,7 +249,6 @@ import pytest
 
 from engine.engine import BacktestEngine, EngineConfig, compute_metrics
 from engine.context import Context
-from strategies.builtin import buy_and_hold, momentum_rotation
 
 
 class _FakeDataLayer:
@@ -263,18 +275,24 @@ def make_bars(n=60, start_price=100.0, drift=0.005, seed=0):
     })
 
 
-def test_buy_and_hold_equity_weighted_over_universe():
+def test_engine_runs_equal_weight_over_universe():
     bars_a = make_bars(80, start_price=100.0)
     bars_b = make_bars(80, start_price=50.0)
     dl = _FakeDataLayer({"600519": bars_a, "000858": bars_b})
     engine = BacktestEngine(EngineConfig(initial_cash=100_000), data_layer=dl)
     calendar = sorted(set(bars_a["date"]) | set(bars_b["date"]))
-    result = engine.run(buy_and_hold, calendar, list(dl._bars), "daily", "2023-01-01", "2024-12-31", "qfq")
+
+    def equal_weight(ctx):
+        if ctx.bar_index == 0:
+            for s in ctx.universe:
+                ctx.buy(s, 1.0 / len(ctx.universe))
+
+    result = engine.run(equal_weight, calendar, ["600519", "000858"], "daily", "2023-01-01", "2024-12-31", "qfq")
     m = result.metrics
     assert m["total_return"] > 0
     assert m["n_buys"] == 2  # one buy per symbol
-    # both symbols were lazy-loaded (used by strategy)
-    assert set(dl.requested) == {"600519", "000858"}
+    # both symbols were lazy-loaded (used by strategy); benchmark 000300 also loaded
+    assert {"600519", "000858"} <= set(dl.requested)
 
 
 def test_lazy_load_only_used_symbols():
@@ -289,7 +307,9 @@ def test_lazy_load_only_used_symbols():
     engine = BacktestEngine(EngineConfig(initial_cash=100_000), data_layer=dl)
     calendar = sorted(set(bars_a["date"]) | set(bars_b["date"]))
     engine.run(only_a, calendar, list(dl._bars), "daily", "2023-01-01", "2024-12-31", "qfq")
-    assert dl.requested == ["600519"]  # 000858 never touched -> never loaded
+    # 600519 used -> loaded; 000858 never touched -> never loaded
+    assert "600519" in dl.requested
+    assert "000858" not in dl.requested
 
 
 def test_anti_lookahead_history_stops_at_current():
@@ -463,6 +483,10 @@ class BacktestEngine:
         ctx._freq = freq
         ctx._adjust = adjust
         self._ctx = ctx
+        # optional one-time initialization on the SAME ctx the loop uses
+        init = getattr(strategy, "__initialize__", None)
+        if callable(init):
+            init(ctx)
         equity_rows: list[dict] = []
         benchmark = self._load_benchmark(start, end)
 
@@ -471,10 +495,10 @@ class BacktestEngine:
             ctx.bar_index = i
             # corporate-action factor adjustment (per symbol, before strategy sees data)
             self._apply_corporate_actions(ctx)
-            # strategy decides target weights
+            # strategy decides target weights; ctx.buy/sell fill IMMEDIATELY at
+            # the current bar's close (eager matching) under A-share rules.
+            # Built-ins sell-then-buy so cash from sells is available to buys.
             strategy(ctx)
-            # record portfolio value AFTER matching orders placed this bar
-            self._match_orders(ctx)
             equity_rows.append({
                 "date": str(day),
                 "cash": ctx.cash,
@@ -752,12 +776,21 @@ def test_resolve_default_is_cached(tmp_path, monkeypatch):
     assert resolve_universe({"types": ["etf"]}, "daily", "qfq") == ["510300"]
 
 
-def test_metadata_calendar_union_of_dates():
-    bars_a = pd.DataFrame({"date": ["2023-01-02", "2023-01-03", "2023-01-04"]})
-    bars_b = pd.DataFrame({"date": ["2023-01-03", "2023-01-04", "2023-01-05"]})
-    dl = _FakeDL(bars_by_symbol={"600519": bars_a, "000858": bars_b})
+def test_metadata_calendar_reads_cache_dates(tmp_path, monkeypatch):
+    # metadata-only: reads date column from cache CSV, does NOT call data_layer
+    monkeypatch.setattr("engine.universe.CACHE_DIR", str(tmp_path))
+    a_dates = "2023-01-02,2023-01-03,2023-01-04"
+    b_dates = "2023-01-03,2023-01-04,2023-01-05"
+    (tmp_path / "stock_600519_daily_qfq.csv").write_text(
+        "date,open,high,low,close,volume\n" + "\n".join(
+            f"{d},1,1,1,1,1" for d in a_dates.split(",")))
+    (tmp_path / "stock_000858_daily_qfq.csv").write_text(
+        "date,open,high,low,close,volume\n" + "\n".join(
+            f"{d},1,1,1,1,1" for d in b_dates.split(",")))
+    dl = _FakeDL()  # get_bars would raise if called — proves metadata-only path
     cal = metadata_calendar(["600519", "000858"], "2023-01-01", "2023-12-31", "daily", "qfq", dl)
     assert cal == ["2023-01-02", "2023-01-03", "2023-01-04", "2023-01-05"]
+    assert dl.requested == []  # never pulled full bars
 ```
 
 - [ ] **Step 2: 运行确认失败**
@@ -821,24 +854,39 @@ def resolve_universe(spec: dict | None, freq: str = "daily", adjust: str = "qfq"
     return cached_symbols(freq=freq, adjust=adjust, types=types)
 
 
+def _cache_path(symbol: str, freq: str, adjust: str) -> str:
+    """Path of the local cache file for a symbol (matches DataLayer._cache_path)."""
+    from data.registry import get_registry
+    info = get_registry().get(symbol)
+    return os.path.join(CACHE_DIR, f"{info.type}_{info.code}_{freq}_{adjust}.csv")
+
+
 def metadata_calendar(symbols: list[str], start: str, end: str, freq: str,
                       adjust: str, data_layer) -> list[str]:
     """Union of all symbols' trading dates in [start, end], sorted.
 
-    Pulls full bars for each symbol once here — that's O(U) loads, but only
-    for the *resolved* universe; strategy-level lazy loading is separate.
-    For very large universes this stays bounded because resolve_universe
-    defaults to cached symbols only.
+    Reads ONLY the date column from each symbol's cache CSV (cheap header
+    peek — no full bar load, honoring the metadata-only alignment). Symbols
+    without a cache file fall back to a light get_bars call. Full bars for a
+    symbol are never loaded here; that stays with the strategy's lazy use.
     """
     date_sets: list[set[str]] = []
-    from data.registry import get_registry
-    reg = get_registry()
+    import pandas as pd
     for sym in symbols:
-        info = reg.get(sym)
+        path = _cache_path(sym, freq, adjust)
+        if os.path.exists(path):
+            try:
+                dates = pd.read_csv(path, usecols=["date"], dtype={"date": str})["date"]
+                date_sets.append({str(d) for d in dates if start <= str(d) <= end})
+                continue
+            except Exception:  # noqa: BLE001 - fall through to data_layer
+                pass
+        from data.registry import get_registry
+        info = get_registry().get(sym)
         df = data_layer.get_bars(info, freq=freq, start=start, end=end, adjust=adjust)
         if df is None or df.empty:
             continue
-        date_sets.append(set(df["date"].astype(str)))
+        date_sets.append({str(d) for d in df["date"] if start <= str(d) <= end})
     if not date_sets:
         return []
     return sorted(set().union(*date_sets))
@@ -1274,10 +1322,6 @@ def run_backtest(
         raise ValueError("no data for universe")
 
     func, strat_name = sm.resolve(strategy) if isinstance(strategy, (str, dict)) else (strategy, getattr(strategy, "__name__", "strategy"))
-    if callable(getattr(func, "__initialize__", None)):
-        from engine.context import Context
-        _c = Context(initial_cash)
-        func.__initialize__(_c)
 
     cfg = EngineConfig(
         initial_cash=initial_cash,
