@@ -68,11 +68,13 @@
 组合感知：
 
 ```python
+ctx.universe              # 候选标的代码列表（策略自选范围，可能含未加载数据的标的）
 ctx.cash                  # 组合现金
 ctx.positions             # dict: symbol -> shares
 ctx.total_value           # 组合净值 = cash + Σ(shares × price)
 ctx.calendar              # 统一日历（日期列表）
 ctx.current_date          # 当前交易日
+ctx.bar_index             # 当前交易日在一统日历中的索引（0 起）
 
 ctx.history(symbol, lookback=0)  # 该标的截至当前日的历史（预对齐+按需切片）
                                  # lookback 沿用现有 bars_upto 约定：0=全历史到当前 bar，
@@ -81,6 +83,8 @@ ctx.price(symbol)                # 该标的最新收盘价
 ctx.buy(symbol, pct)             # 用当前净值 pct% 买入，返回 bool
 ctx.sell(symbol, pct)            # 卖该标的持仓 pct%（默认清仓），返回 bool
 ```
+
+> lazy-load：`ctx.history(s)` 首次调用该标的时才触发加载（离线优先，未命中实时抓取并缓存）。策略遍历 `ctx.universe` 只触发它实际分析的标的加载。
 
 ### `engine/rules.py` — 保留
 
@@ -93,6 +97,80 @@ A股规则（T+1 / 涨跌停 / 百股整手 / 佣金 / 印花税）保留，按*
   - `buy_and_hold`：首日等权买入 universe 全部标的，持有到结束
   - `momentum_rotation`（新增示例）：按历史动量排名选前 N 个标的轮动，卖旧买新（N 与动量窗口由策略源码内默认值定义，外部不可调参）
 - `strategies/manager.py`：去 `params_schema`
+
+## 3.1 策略编写示例
+
+策略是 `def strategy(ctx): ...`，每个交易日调用一次。典型写法：分析各标的历史 → 决定目标持仓 → 用 `ctx.buy`/`ctx.sell` 下达订单。
+
+### 示例 1：买入持有（等权买入全部候选标的，只调仓一次）
+
+```python
+def strategy(ctx):
+    if ctx.bar_index > 0:
+        return
+    n = len(ctx.universe)
+    for s in ctx.universe:
+        ctx.buy(s, 1.0 / n)
+```
+
+### 示例 2：动量轮动（选最近 60 日涨幅最高的 3 个标的持有，定期轮换）
+
+```python
+def strategy(ctx):
+    # 每 20 个交易日才做一次调仓决策
+    if ctx.bar_index % 20 != 0:
+        return
+
+    momentum = {}
+    for s in ctx.universe:
+        bars = ctx.history(s)          # 首次访问触发该标的 lazy 加载
+        if len(bars) < 60:
+            continue
+        ret = bars["close"].iloc[-1] / bars["close"].iloc[-60] - 1
+        momentum[s] = ret
+
+    if not momentum:
+        return
+    top = sorted(momentum, key=momentum.get, reverse=True)[:3]
+
+    # 卖出不在 top 的持仓
+    for s in list(ctx.positions):
+        if s not in top:
+            ctx.sell(s)
+    # 买入 top 中尚未持仓的标的，等权
+    for s in top:
+        if s not in ctx.positions:
+            ctx.buy(s, 1.0 / len(top))
+```
+
+> 同一 bar 内的 `ctx.sell` + `ctx.buy` 订单会被引擎**统一收集、按收盘价一并撮合**，目标权重都相对同一时刻的净值计算，无需关心顺序。
+
+### 示例 3：多标的均线策略（金叉买、死叉卖，按标的独立判断）
+
+```python
+def strategy(ctx):
+    for s in ctx.universe:
+        bars = ctx.history(s)
+        if len(bars) < 60:
+            continue
+        close = bars["close"].astype(float)
+        ma_short = close.rolling(20).mean()
+        ma_long = close.rolling(60).mean()
+        cur = ma_short.iloc[-1] > ma_long.iloc[-1]
+        prev = ma_short.iloc[-2] > ma_long.iloc[-2] if len(bars) >= 2 else False
+
+        if cur and not prev and s not in ctx.positions:
+            ctx.buy(s, 0.5)            # 金叉：买入，最多占净值 50%
+        elif not cur and prev and s in ctx.positions:
+            ctx.sell(s)                # 死叉：清仓
+```
+
+### 通用约定
+
+- `ctx.history(s)` 返回的是**截至当前 bar** 的 DataFrame（含 `date/open/high/low/close/volume`），天然防前视
+- `ctx.buy(s, pct)` 的 `pct` 相对当前净值（0~1）；`ctx.sell(s, pct)` 卖持仓的 pct%，缺省为清仓
+- 成交受 A股规则约束（T+1 / 涨跌停 / 百股整手 / 费用），撮合不一定完全成交，`buy`/`sell` 返回 `bool` 表示是否成交；策略不应假设下单必成
+- 需要可调数值（窗口、权重、阈值）时**在策略源码内定义默认值**，外部不传参
 
 ## 4. API 层
 
