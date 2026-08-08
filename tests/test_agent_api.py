@@ -43,7 +43,7 @@ def test_chat_returns_session(tmp_path, monkeypatch):
     # 这样 handle_chat -> gate_extract 走假 provider，绝不触发真实 LLM 或网络
     cfg_path = tmp_path / "llm.json"
     cfg_path.write_text(json.dumps({"default": "p1", "providers": [{
-        "name": "p1", "type": "openai_compat", "base_url": "http://127.0.0.1:1",
+        "name": "p1", "type": "openai_compat", "base_url": "http://example.invalid",
         "model": "m", "api_key": "k"}]}), encoding="utf-8")
     cfg = ProviderConfigStore(str(cfg_path))
     fake = FakeGateProvider([LLMResponse(

@@ -118,15 +118,16 @@ def test_register_draft_returns_strategy_id(tmp_path):
 
 def test_session_summaries_sorted_and_truncated(tmp_path):
     c = ChatStore(db_path=str(tmp_path / "t.db"))
-    c.add_message("s2", "user", "旧")
-    c.add_message("s1", "user", "新" * 40)  # 40 字 -> 截断加省略号
-    c.add_message("s1", "assistant", "完成")
-    # 相同秒级时间戳场景：手动对齐 created_at 以触发 tie-breaker
+    c.add_message("s1", "user", "旧")          # 先插入 s1：MAX(id) 更小
+    c.add_message("s2", "user", "新" * 40)     # 后插入 s2：MAX(id) 更大
+    c.add_message("s2", "assistant", "完成")
+    # 对齐 created_at：MAX(created_at) 完全相同
     c.conn.execute("UPDATE chat_messages SET created_at='2026-01-01T00:00:00.000000+00:00'")
     c.conn.commit()
     sums = c.session_summaries(0, 10)
-    # 同秒 -> 依赖 MAX(id) DESC：s1 最后一条 id 更大 -> s1 在前
-    assert [s["session_id"] for s in sums] == ["s1", "s2"]
+    # 同秒：去掉 MAX(id) DESC 时按 session_id ASC 会得到 ["s1","s2"]（s1 更早），
+    # 正是 MAX(id) DESC tie-breaker 让 id 更大的 s2 排前 —— 真正测试该 tie-breaker
+    assert [s["session_id"] for s in sums] == ["s2", "s1"]
     assert sums[0]["message_count"] == 2
     assert sums[0]["title"].endswith("…")
     assert len(sums[0]["title"]) == 31
