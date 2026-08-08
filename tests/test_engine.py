@@ -158,3 +158,35 @@ def test_compute_metrics_basic():
     assert m["final_equity"] == 149
     assert m["max_drawdown"] <= 0  # strictly increasing -> no drawdown
     assert m["n_trades"] == 0
+
+
+def test_context_combination_api():
+    import pandas as pd
+    from engine.engine import BacktestEngine, EngineConfig
+    from engine.context import Context
+
+    class _FakeDL:
+        def __init__(self, bars):
+            self._bars = bars
+        def symbol_info(self, symbol):
+            from data.sources import SymbolInfo
+            return SymbolInfo(symbol, symbol, "stock", "sh")
+        def get_bars(self, info, freq="daily", start="", end="", adjust="qfq"):
+            return self._bars[info.code]
+
+    bars_a = pd.DataFrame({
+        "date": pd.date_range("2023-01-02", periods=5, freq="B").strftime("%Y-%m-%d"),
+        "open": [100]*5, "high": [101]*5, "low": [99]*5, "close": [100]*5, "volume": [10000]*5,
+    })
+    eng = BacktestEngine(EngineConfig(initial_cash=100_000))
+    ctx = Context(100_000, engine=eng, universe=["600519"], calendar=list(bars_a["date"]),
+                  data_layer=_FakeDL({"600519": bars_a}))
+    assert ctx.cash == 100_000
+    assert ctx.positions == {}
+    assert ctx.total_value == 100_000
+    ctx.state["x"] = 1
+    assert ctx.state["x"] == 1
+    bars = ctx.history("600519")
+    assert list(bars.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert len(bars) == 5
+    assert ctx.price("600519") == 100.0
