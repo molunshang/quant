@@ -23,8 +23,8 @@ from data.precache import manager as precache_manager
 from data.registry import get_registry
 from strategies.manager import StrategyManager
 
-from .runner import run_backtest, run_optimize
-from .schemas import BacktestRequest, OptimizeRequest, RegisterStrategyRequest
+from .runner import run_backtest
+from .schemas import BacktestRequest, RegisterStrategyRequest
 
 
 @asynccontextmanager
@@ -136,9 +136,8 @@ def backtest(req: BacktestRequest):
     """Run a backtest. strategy may be a name or {name, source} dict."""
     try:
         return run_backtest(
-            symbol=req.symbol,
-            strategy_ref=req.strategy,
-            params=req.params,
+            strategy=req.strategy,
+            universe=req.universe.model_dump() if req.universe else None,
             freq=req.freq,
             start=req.start,
             end=req.end,
@@ -148,27 +147,6 @@ def backtest(req: BacktestRequest):
             stamp_duty=req.stamp_duty,
             lot_size=req.lot_size,
             strategy_manager=_strategies,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-
-@app.post("/api/optimize")
-def optimize(req: OptimizeRequest):
-    """Grid-search strategy params, ranked by a chosen metric. Agent iteration endpoint."""
-    try:
-        return run_optimize(
-            symbol=req.symbol,
-            strategy_ref=req.strategy,
-            param_grid=req.param_grid,
-            metric=req.metric,
-            freq=req.freq,
-            start=req.start,
-            end=req.end,
-            adjust=req.adjust,
-            initial_cash=req.initial_cash,
         )
     except HTTPException:
         raise

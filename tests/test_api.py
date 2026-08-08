@@ -19,6 +19,15 @@ def make_bars(n=120, start_price=100.0):
     })
 
 
+class _FakeDataLayer:
+    """Synthetic bars for any symbol — no network. Mirrors engine test fakes."""
+    def symbol_info(self, symbol):
+        from data.sources import SymbolInfo
+        return SymbolInfo(symbol, symbol, "stock", "sh")
+    def get_bars(self, info, freq="daily", start="", end="", adjust="qfq"):
+        return make_bars()
+
+
 client = TestClient(app)
 
 
@@ -40,15 +49,16 @@ def test_strategies_list():
     r = client.get("/api/strategies")
     assert r.status_code == 200
     names = [s["name"] for s in r.json()["strategies"]]
-    assert "sma_cross" in names
     assert "buy_and_hold" in names
+    assert "momentum_rotation" in names
 
 
 def test_register_and_use_custom_strategy():
     src = """
-def strategy(ctx, params):
+def handle_data(ctx):
     if ctx.bar_index == 0:
-        ctx.buy()
+        for s in ctx.universe:
+            ctx.buy(s, 1.0 / len(ctx.universe))
 """
     r = client.post("/api/strategies", json={"name": "test_allin", "source": src, "description": "t"})
     assert r.status_code == 200
@@ -59,26 +69,49 @@ def strategy(ctx, params):
     assert r2.status_code == 400
 
 
-def test_backtest_endpoint_with_mock():
-    """End-to-end via runner with synthetic bars (no network)."""
-    bars = make_bars()
-    res = run_backtest(
-        symbol="600519",
-        strategy_ref="buy_and_hold",
-        params={},
-        freq="daily",
-        start="2023-01-01",
-        end="2023-06-30",
-    ) if False else None
-    # Direct runner test with injected data layer not supported; test engine path instead.
-    from engine.engine import BacktestEngine, EngineConfig
+def test_backtest_runner_universe_no_symbol(tmp_path, monkeypatch):
+    """Portfolio runner: universe spec instead of a single symbol, no params."""
+    import pandas as pd
+    from api.runner import run_backtest
     from strategies.builtin import buy_and_hold
-    eng = BacktestEngine(EngineConfig(initial_cash=100_000))
-    result = eng.run(buy_and_hold, bars)
-    m = result.metrics
+    from engine.universe import metadata_calendar
+
+    bars = make_bars()
+    class _DL:
+        def symbol_info(self, symbol):
+            from data.sources import SymbolInfo
+            return SymbolInfo(symbol, symbol, "stock", "sh")
+        def get_bars(self, info, freq="daily", start="", end="", adjust="qfq"):
+            return make_bars()
+    # isolate from the real cache dir so the calendar comes from the fake DL
+    monkeypatch.setattr("engine.universe.CACHE_DIR", str(tmp_path))
+    res = run_backtest(
+        strategy=buy_and_hold,
+        universe={"symbols": ["600519"]},
+        freq="daily", start="2023-01-01", end="2024-12-31",
+        data_layer=_DL(),
+    )
+    assert res["success"] is True
+    assert "total_return" in res["metrics"]
+    assert res["symbol"] == "600519"
+
+
+def test_backtest_endpoint_with_mock(tmp_path, monkeypatch):
+    """End-to-end via runner with synthetic bars (no network)."""
+    from api.runner import run_backtest
+    from strategies.builtin import buy_and_hold
+    monkeypatch.setattr("engine.universe.CACHE_DIR", str(tmp_path))
+    res = run_backtest(
+        strategy=buy_and_hold,
+        universe={"symbols": ["600519"]},
+        freq="daily", start="2023-01-01", end="2023-06-30",
+        data_layer=_FakeDataLayer(),
+    )
+    m = res["metrics"]
+    assert res["success"] is True
     assert m["total_return"] > 0
     # day 0: bought all-in + commission -> equity slightly below initial cash
-    first = m["equity_curve"][0]["equity"]
+    first = res["equity_curve"][0]["equity"]
     assert first < 100_000
     assert first > 99_000
 
