@@ -32,14 +32,15 @@
   <div class="controls">
     <div class="panel">
       <h3>回测设置</h3>
-      <label for="symbol">交易标的</label>
-      <input id="symbol" list="symbol-list" value="600519" placeholder="代码或名称">
-      <datalist id="symbol-list"></datalist>
-      <label for="symbolType">类型</label>
-      <select id="symbolType">
-        <option value="">全部</option><option value="stock">股票</option>
-        <option value="etf">ETF</option><option value="fund">基金</option>
+      <label for="universeType">标的池类型</label>
+      <select id="universeType">
+        <option value="">全部（已缓存标的）</option>
+        <option value="stock">股票</option>
+        <option value="etf">ETF</option>
+        <option value="fund">基金</option>
       </select>
+      <label for="universeSymbols">标的列表（可选，逗号分隔；留空=按类型取已缓存标的）</label>
+      <input id="universeSymbols" placeholder="600519,000858,510300">
       <label for="freq">K线频率</label>
       <select id="freq">
         <option value="daily" selected>日线</option>
@@ -65,19 +66,16 @@
         <select id="strategyName"></select>
       </div>
       <div id="customWrap" class="strat-src">
-        <label for="strategySrc">策略源码（定义 strategy(ctx, params)）</label>
-        <textarea id="strategySrc" rows="10" placeholder="def strategy(ctx, params):
-    # 示例：跌破20日均线买入
-    bars = ctx.bars_upto()
-    if len(bars) < 20:
+        <label for="strategySrc">策略源码（定义 initialize(ctx) 可选 + handle_data(ctx)）</label>
+        <textarea id="strategySrc" rows="12" placeholder="def handle_data(ctx):
+    # 首日等权买入全部候选标的，持有到结束
+    if ctx.bar_index > 0:
         return
-    ma = bars['close'].astype(float).rolling(20).mean().iloc[-1]
-    if ctx.price &lt; ma and ctx.shares == 0:
-        ctx.buy()
+    n = len(ctx.universe)
+    for s in ctx.universe:
+        ctx.buy(s, 1.0 / n)
 "></textarea>
       </div>
-      <label for="paramsJson">策略参数 (JSON)</label>
-      <textarea id="paramsJson" rows="3" placeholder='{"short": 20, "long": 60}'></textarea>
     </div>
 
     <button id="runBtn" class="btn">▶ 运行回测</button>
@@ -98,7 +96,7 @@
     <div class="trades">
       <h3 style="font-size:14px;color:var(--muted);margin-bottom:8px;">交易记录</h3>
       <table id="tradesTable">
-        <thead><tr><th>日期</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>佣金</th><th>印花税</th></tr></thead>
+        <thead><tr><th>标的</th><th>日期</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>佣金</th><th>印花税</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -109,19 +107,7 @@
 <script>
 let equityChart, klineChart, drawdownChart;
 
-// ---- load symbols & strategies ----
-async function loadSymbols() {
-  const type = $('symbolType').value;
-  const r = await fetch(`/api/symbols?type=${type}&limit=500`);
-  const data = await r.json();
-  const dl = $('symbol-list');
-  dl.innerHTML = '';
-  data.symbols.forEach(s => {
-    const opt = document.createElement('option');
-    opt.value = s.code; opt.label = `${s.name} (${s.code})`;
-    dl.appendChild(opt);
-  });
-}
+// ---- load strategies ----
 async function loadStrategies() {
   const r = await fetch('/api/strategies');
   const data = await r.json();
@@ -134,7 +120,6 @@ async function loadStrategies() {
   });
 }
 
-$('symbolType').addEventListener('change', loadSymbols);
 $('strategyType').addEventListener('change', () => {
   const custom = $('strategyType').value === 'custom';
   $('builtinWrap').style.display = custom ? 'none' : '';
@@ -168,17 +153,20 @@ async function runBacktest() {
   } else {
     strategy = $('strategyName').value;
   }
-  let params = {};
-  try { params = JSON.parse($('paramsJson').value || '{}'); } catch(e) { status.textContent = '⚠ 参数 JSON 格式错误'; $('runBtn').disabled = false; return; }
+
+  const universe = {};
+  const types = $('universeType').value;
+  const syms = $('universeSymbols').value.trim();
+  if (syms) universe.symbols = syms.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+  else if (types) universe.types = [types];
 
   const payload = {
-    symbol: $('symbol').value.trim(),
+    ...(Object.keys(universe).length ? {universe} : {}),
     freq: $('freq').value,
     start: $('start').value,
     end: $('end').value,
     adjust: $('adjust').value,
     strategy,
-    params,
     initial_cash: parseFloat($('cash').value),
   };
 
@@ -189,7 +177,7 @@ async function runBacktest() {
     const data = await r.json();
     if (!r.ok || !data.success) throw new Error(data.detail || '回测失败');
     renderResults(data);
-    status.textContent = `✅ 完成：${data.symbol_name} ${data.freq} · ${data.strategy}`;
+    status.textContent = `✅ 完成：${(data.universe||[]).length} 标的 ${data.freq} · ${data.strategy}`;
   } catch(e) {
     status.textContent = `❌ ${e.message}`;
   } finally {
@@ -223,7 +211,7 @@ function renderResults(data) {
   tbody.innerHTML = data.trades.map(t => {
     const cls = t.side === 'buy' ? 'buy' : 'sell';
     const dir = t.side === 'buy' ? '买入' : '卖出';
-    return `<tr><td>${t.date}</td><td class="${cls}">${dir}</td><td>${t.shares}</td><td>${t.price}</td><td>${t.amount.toFixed(2)}</td><td>${t.commission.toFixed(2)}</td><td>${(t.stamp_duty||0).toFixed(2)}</td></tr>`;
+    return `<tr><td>${t.symbol}</td><td>${t.date}</td><td class="${cls}">${dir}</td><td>${t.shares}</td><td>${t.price}</td><td>${t.amount.toFixed(2)}</td><td>${t.commission.toFixed(2)}</td><td>${(t.stamp_duty||0).toFixed(2)}</td></tr>`;
   }).join('');
 
   // charts
@@ -289,7 +277,7 @@ function buildKlineOption(data) {
 }
 
 // init
-loadSymbols(); loadStrategies();
+loadStrategies();
 </script>
 </body>
 </html>
