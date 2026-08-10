@@ -49,6 +49,7 @@ def run_backtest(
         "symbol": symbols[0] if symbols else "",
         "symbol_name": (lambda info: info.name)(get_registry().get(symbols[0])) if symbols else "",
         "freq": freq,
+        "adjust": adjust,
         "metrics": {k: v for k, v in metrics.items() if k not in ("equity_curve", "trades")},
         "equity_curve": metrics.get("equity_curve", []),
         "trades": metrics.get("trades", []),

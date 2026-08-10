@@ -288,7 +288,7 @@ async function loadKline(symbol) {
     freq: data.freq || 'daily',
     start: data.metrics ? (data.equity_curve?.[0]?.date || '2020-01-01') : '2020-01-01',
     end: data.equity_curve?.[data.equity_curve.length-1]?.date || '2024-12-31',
-    adjust: 'qfq',
+    adjust: data.adjust || 'qfq',
   });
   let bars = [];
   try {
