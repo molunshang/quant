@@ -26,7 +26,7 @@ class BacktestRequest(BaseModel):
 
 class RegisterStrategyRequest(BaseModel):
     name: str = Field(..., description="策略名")
-    source: str = Field(..., description="Python 源码，定义 strategy(ctx, params)")
+    source: str = Field(..., description="Python 源码，定义 initialize(ctx)（可选）+ handle_data(ctx)")
     description: str = Field("")
 
 
@@ -35,14 +35,3 @@ class SymbolResponse(BaseModel):
     name: str
     type: str
     exchange: str
-
-
-class BacktestResponse(BaseModel):
-    success: bool
-    symbol: str
-    freq: str
-    metrics: dict
-    equity_curve: list[dict]
-    trades: list[dict]
-    strategy: str
-    params: dict

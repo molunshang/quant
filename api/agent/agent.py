@@ -31,7 +31,7 @@ def build_system_prompt(goal: str | dict | None = None) -> str:
             if c:
                 lines.append(f"目标约束（必须满足，check_goal 用这些阈值校验）：{json.dumps(c, ensure_ascii=False)}")
             if goal.get("universe"):
-                lines.append(f"标的范围（选标的时只在此范围内选择）：{'、'.join(goal['universe'])}")
+                lines.append(f"标的池范围（策略在 universe 内自选标的）：{'、'.join(goal['universe'])}")
             p = goal.get("period")
             if p:
                 lines.append(f"回测时间区间：{p.get('start')} 至 {p.get('end')}（run_backtest 的 start/end 使用此区间）")

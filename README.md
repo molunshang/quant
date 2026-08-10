@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **自定义策略**：策略即 `strategy(ctx, params)` Python 函数，通过 API 提交源码或引用内置策略（AST 沙箱校验，拒绝 import / 私有访问）
+- **自定义策略**：组合级策略 `initialize(ctx)`（可选）+ `handle_data(ctx)`，策略从 universe 自选标的、自定买卖，通过 API 提交源码或引用内置策略（AST 沙箱校验，拒绝 import / 私有访问）
 - **Web 可视化**：权益曲线、回撤曲线、K线买卖点标记（ECharts）
 - **AI 目标优化 Agent**：用自然语言设定目标（年化收益 / 超额 / 最大回撤），LLM 自主选标的、写策略、跑回测、校验是否达标并发布；目标不明确时先澄清、执行前先确认（目标门卫）；Web 聊天面板实时流式进度（SSE）
 - **多 LLM 后端**：Anthropic + OpenAI 兼容多 Provider（可接 DeepSeek / Qwen 等），Web 面板在线配置、测试连接、设默认
@@ -53,11 +53,11 @@ python3 -m venv .venv
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/backtest` | 运行回测，返回指标+权益曲线+交易记录 |
+| POST | `/api/backtest` | 运行组合回测（策略自选标的），返回指标+权益曲线+交易记录 |
 | POST | `/api/strategies` | 注册/更新策略 |
 | GET  | `/api/strategies` | 列出策略 |
-| POST | `/api/optimize` | 参数网格扫描 |
 | GET  | `/api/symbols` | 可交易标的名录 |
+| GET  | `/api/bars/{symbol}` | 单标的 OHLCV K线（图表用） |
 | GET  | `/api/meta` | bar 频率、佣金默认值、可用指标 |
 | POST | `/api/chart/equity` | 权益曲线 ECharts 配置 |
 
