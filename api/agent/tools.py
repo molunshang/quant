@@ -127,7 +127,7 @@ TOOLS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "strategy_ref": {"type": "string", "description": "Strategy name (registered draft). Omit to use the default buy_and_hold."},
+                "strategy_ref": {"type": "string", "description": "Strategy name (registered draft)."},
                 "universe": {"type": "object", "description": "Optional symbol pool: {\"symbols\": [...]} explicit list, or {\"types\": [...]} type filter. Omit to default to all cached symbols."},
                 "freq": {"type": "string", "enum": ["daily", "1", "5", "15", "30", "60"], "description": "Bar frequency: 'daily' for daily bars, or a minute interval in minutes ('1'|'5'|'15'|'30'|'60')."},
                 "start": {"type": "string", "description": "Start date YYYY-MM-DD"},
