@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from data.registry import get_registry
-from strategies.base import validate_strategy_source
+from strategies.base import load_strategy_from_source
 from strategies.manager import StrategyManager
 
 
@@ -34,25 +34,22 @@ def list_symbols(input_: dict, ctx: AgentToolContext) -> str:
 
 
 def run_backtest(input_: dict, ctx: AgentToolContext) -> str:
-    symbol = input_["symbol"]
     strategy_ref = input_.get("strategy_ref", input_.get("strategy", "buy_and_hold"))
-    params = input_.get("params", {})
     job_id = ctx.executor.submit(
-        symbol=symbol,
         strategy_ref=strategy_ref,
-        params=params,
+        universe=input_.get("universe"),
         freq=input_.get("freq", "daily"),
         start=input_.get("start", "2020-01-01"),
         end=input_.get("end", "2024-12-31"),
         adjust=input_.get("adjust", "qfq"),
     )
-    return _json({"job_id": job_id, "status": "running", "symbol": symbol})
+    return _json({"job_id": job_id, "status": "running", "strategy": strategy_ref})
 
 
 def register_strategy(input_: dict, ctx: AgentToolContext) -> str:
     name = input_["name"]
     source = input_["source"]
-    validate_strategy_source(source)  # AST sandbox — raises on invalid
+    load_strategy_from_source(source, name)  # AST sandbox + requires handle_data(ctx) — raises on invalid
     rec = ctx.store.register_draft(name, source, input_.get("description", ""))
     if ctx.session_id:
         ctx.store.link_session_strategy(ctx.session_id, name, rec["version"])
@@ -126,29 +123,28 @@ TOOLS: list[dict] = [
     },
     {
         "name": "run_backtest",
-        "description": "Submit a backtest job asynchronously. Returns {job_id, status, symbol}. Submit multiple in one turn to run in parallel; the agent waits for all to finish before continuing. strategy_ref is a strategy NAME (the current draft) — call register_strategy first to create/update the draft.",
+        "description": "Submit a portfolio backtest job asynchronously. Returns {job_id, status, strategy}. Submit multiple in one turn to run in parallel; the agent waits for all to finish before continuing. strategy_ref is a strategy NAME (the current draft) — call register_strategy first to create/update the draft. The strategy picks its own symbols from the universe (默认=已缓存标的集); universe is optional to restrict the pool.",
         "parameters": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "Symbol code, e.g. 510300"},
                 "strategy_ref": {"type": "string", "description": "Strategy name (registered draft). Omit to use the default buy_and_hold."},
-                "params": {"type": "object", "description": "Strategy parameters passed through to strategy(ctx, params), e.g. {\"short\": 20}."},
+                "universe": {"type": "object", "description": "Optional symbol pool: {\"symbols\": [...]} explicit list, or {\"types\": [...]} type filter. Omit to default to all cached symbols."},
                 "freq": {"type": "string", "enum": ["daily", "1", "5", "15", "30", "60"], "description": "Bar frequency: 'daily' for daily bars, or a minute interval in minutes ('1'|'5'|'15'|'30'|'60')."},
                 "start": {"type": "string", "description": "Start date YYYY-MM-DD"},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD"},
                 "adjust": {"type": "string", "enum": ["qfq", "hfq", "none"], "description": "Price adjustment: 'qfq' forward-adjusted (default), 'hfq' backward-adjusted, 'none' raw."},
             },
-            "required": ["symbol"],
+            "required": ["strategy_ref"],
         },
     },
     {
         "name": "register_strategy",
-        "description": "Create or update a strategy draft from Python source. The source must define `def strategy(ctx, params)` and use ctx.buy()/ctx.sell(). Updates the current draft; version increments. Always call this before running a backtest on your own strategy.",
+        "description": "Create or update a strategy draft from Python source. The source must define `def initialize(ctx)` (optional) + `def handle_data(ctx)` and use ctx.history()/ctx.buy()/ctx.sell(). Updates the current draft; version increments. Always call this before running a backtest on your own strategy.",
         "parameters": {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Strategy name (draft identifier). Registering an existing name updates that draft."},
-                "source": {"type": "string", "description": "Python source defining `def strategy(ctx, params)`, called once per bar. ctx provides: ctx.price/open/high/low/volume (current bar), ctx.position/ctx.shares/ctx.cash, ctx.bars_upto(lookback) for historical bars. Trade via ctx.buy(shares, price) / ctx.sell(shares, price) (both return bool; price defaults to close, shares defaults to all-in / full position). params is the run_backtest params dict. Engine enforces A-share rules (T+1, price limit, 100-share lots). Indicator helpers sma/ema/rsi/macd are pre-injected (call directly, no import); math/numpy/pandas may be imported as math/np/pandas."},
+                "source": {"type": "string", "description": "Python source defining `def handle_data(ctx)` (called once per time step = per trading day), plus optional `def initialize(ctx)` for cross-bar constants in ctx.state. ctx provides: ctx.universe (candidate symbols), ctx.state (cross-bar dict), ctx.history(symbol, lookback) for a symbol's history up to the current bar, ctx.price(symbol), ctx.positions (dict symbol->shares), ctx.cash, ctx.total_value. Trade via ctx.buy(symbol, pct) / ctx.sell(symbol, pct) (pct relative to net value 0~1, both return bool; sell default clears the position). Engine enforces A-share rules (T+1, price limit, 100-share lots). Indicator helpers sma/ema/rsi/macd are pre-injected (call directly, no import); math/numpy/pandas may be imported as math/np/pandas."},
                 "description": {"type": "string", "description": "Optional human-readable summary of the strategy's logic."},
             },
             "required": ["name", "source"],

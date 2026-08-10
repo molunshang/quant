@@ -18,9 +18,8 @@ def build_system_prompt(goal: str | dict | None = None) -> str:
     lines = [
         "你是A股量化策略优化助手。用户给出投资目标（如年化收益、超额收益、最大回撤）。",
         "你的工作流程：",
-        "1. 先 list_symbols 选标的（可并行多个）。",
-        "2. 用 register_strategy 编写/修改策略草稿。源码定义 def strategy(ctx, params)，每次 bar 调用一次，用 ctx.price/open/high/low/volume、ctx.position/cash、ctx.bars_upto(n) 读取行情与持仓，用 ctx.buy(shares, price) / ctx.sell(shares, price) 下单（price 默认收盘价，shares 默认全仓/清仓；引擎按 A 股规则成交：T+1、涨跌停、100 股整手）。指标助手 sma/ema/rsi/macd 已内置可直接调用（无需 import）；也可 import math/numpy/pandas（常用别名 math/np/pd）。params 是 run_backtest 传入的参数。",
-        "3. 用 run_backtest 提交回测（strategy_ref 用当前草稿名），可一次提交多个并行。",
+        "1. 用 register_strategy 编写/修改组合策略草稿。源码定义 def initialize(ctx)（可选，一次初始化）+ def handle_data(ctx)（每个交易日调用一次）。用 ctx.history(symbol, lookback) 读取各标的截至当前 bar 的历史、ctx.price(symbol)、ctx.positions、ctx.cash、ctx.total_value 分析行情与持仓；用 ctx.buy(symbol, pct) / ctx.sell(symbol, pct) 下单（pct 相对组合净值 0~1，返回 bool；sell 默认清仓）。标的由策略自己在 ctx.universe 里选。引擎按 A 股规则成交：T+1、涨跌停、100 股整手。指标助手 sma/ema/rsi/macd 已内置可直接调用（无需 import）；也可 import math/numpy/pandas（常用别名 math/np/pd）。",
+        "2. 用 run_backtest 提交组合回测（strategy_ref 用当前草稿名），可传 universe 限制标的池（缺省=已缓存标的集），可一次提交多个并行。",
         "4. 查看回测指标，用 check_goal 校验是否达标。未达标则修改草稿再回测。",
         "5. 达标后必须用 publish_strategy（goal_met=true）发布。",
         "工具结果会被合并到下一轮。达成目标后给出简短中文汇报。",

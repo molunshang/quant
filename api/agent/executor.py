@@ -13,8 +13,8 @@ _job_ids = itertools.count(1)
 @dataclass
 class BacktestJob:
     id: int
-    symbol: str
-    params: dict
+    strategy: str
+    universe: dict | None = None
     status: str = "running"
     result: dict | None = None
     error: str | None = None
@@ -29,17 +29,16 @@ class BacktestExecutor:
         self._futures: list[concurrent.futures.Future] = []
         self._order: list[int] = []
 
-    def submit(self, symbol, strategy_ref, params=None, freq="daily", start="2020-01-01",
+    def submit(self, strategy_ref, universe=None, freq="daily", start="2020-01-01",
                end="2024-12-31", adjust="qfq") -> int:
         job_id = next(_job_ids)
-        job = BacktestJob(id=job_id, symbol=symbol, params=params or {})
+        job = BacktestJob(id=job_id, strategy=strategy_ref, universe=universe)
         self._jobs[job_id] = job
         self._order.append(job_id)
         fut = self._pool.submit(
             run_backtest,
-            symbol=symbol,
-            strategy_ref=strategy_ref,
-            params=params,
+            strategy=strategy_ref,
+            universe=universe,
             freq=freq,
             start=start,
             end=end,
@@ -72,8 +71,8 @@ class BacktestExecutor:
         return [
             {
                 "job_id": j.id,
-                "symbol": j.symbol,
-                "params": j.params,
+                "strategy": j.strategy,
+                "universe": j.universe,
                 "status": j.status,
                 "result": j.result,
                 "error": j.error,

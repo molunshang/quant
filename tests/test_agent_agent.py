@@ -27,8 +27,9 @@ class FakeExecutor:
     def submit(self, *a, **k):
         return 1
     def wait_all(self, timeout=300):
-        return [{"job_id": 1, "symbol": "510300", "status": "done",
-                 "result": {"metrics": {"annual_return": 0.12, "max_drawdown": -0.10}, "symbol_name": "沪深300ETF"},
+        return [{"job_id": 1, "strategy": "ma", "universe": {"symbols": ["510300"]}, "status": "done",
+                 "result": {"metrics": {"annual_return": 0.12, "max_drawdown": -0.10},
+                            "symbol": "510300", "symbol_name": "沪深300ETF"},
                  "error": None}]
     def reset_batch(self):
         pass
@@ -84,8 +85,8 @@ def test_agent_loops_until_publish():
     # Turn 1: register draft + run backtest; Turn 2: check_goal (met) + publish; Turn 3: final text.
     provider = FakeProvider([
         LLMResponse(text=None, tool_uses=[
-            ToolCall(id="1", name="register_strategy", input={"name": "ma", "source": "def strategy(ctx,p): pass"}),
-            ToolCall(id="2", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+            ToolCall(id="1", name="register_strategy", input={"name": "ma", "source": "def handle_data(ctx):\n    pass"}),
+            ToolCall(id="2", name="run_backtest", input={"strategy_ref": "ma"}),
         ]),
         LLMResponse(text=None, tool_uses=[
             ToolCall(id="3", name="check_goal", input={"metrics": {"annual_return": 0.12}, "constraints": {"annual_return": 0.10}}),
@@ -141,27 +142,27 @@ def test_hydrated_manager_resolves_draft_name(monkeypatch, tmp_path):
     from api.agent.store import StrategyStore
 
     store = StrategyStore(db_path=str(tmp_path / "t.db"))
-    store.register_draft("ma", "def strategy(ctx, params):\n    pass", "sma")
+    store.register_draft("ma", "def handle_data(ctx):\n    pass", "sma")
 
     captured = {}
 
-    def fake_run_backtest(symbol, strategy_ref, params=None, freq="daily", start="2020-01-01",
+    def fake_run_backtest(strategy, universe=None, freq="daily", start="2020-01-01",
                           end="2024-12-31", adjust="qfq", initial_cash=100_000.0,
                           strategy_manager=None, data_layer=None):
         # A fresh empty StrategyManager would raise KeyError here; the hydrated
         # manager loaded from the store must resolve the draft name.
-        func, name = strategy_manager.resolve(strategy_ref)
+        func, name = strategy_manager.resolve(strategy)
         captured["resolved"] = name
-        return {"success": True, "symbol": symbol, "symbol_name": "测试ETF", "freq": freq,
+        return {"success": True, "universe": ["510300"], "symbol": "510300", "symbol_name": "测试ETF", "freq": freq,
                 "metrics": {"total_return": 0.2, "annual_return": 0.12, "max_drawdown": -0.10},
-                "equity_curve": [], "trades": [], "strategy": name, "params": params or {}}
+                "equity_curve": [], "trades": [], "strategy": name}
 
     import api.agent.executor as exmod
     monkeypatch.setattr(exmod, "run_backtest", fake_run_backtest)
 
     provider = FakeProvider([
         LLMResponse(text=None, tool_uses=[
-            ToolCall(id="1", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+            ToolCall(id="1", name="run_backtest", input={"strategy_ref": "ma"}),
         ]),
         LLMResponse(text="完成", tool_uses=[]),
     ])
@@ -187,16 +188,16 @@ def test_cross_turn_register_then_backtest_resolves(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake_run_backtest(symbol, strategy_ref, params=None, freq="daily", start="2020-01-01",
+    def fake_run_backtest(strategy, universe=None, freq="daily", start="2020-01-01",
                           end="2024-12-31", adjust="qfq", initial_cash=100_000.0,
                           strategy_manager=None, data_layer=None):
         # strategy_ref must be the name registered by the tool in turn 1; a
         # non-hydrated manager would raise KeyError here.
-        func, name = strategy_manager.resolve(strategy_ref)
+        func, name = strategy_manager.resolve(strategy)
         captured["resolved"] = name
-        return {"success": True, "symbol": symbol, "symbol_name": "测试ETF", "freq": freq,
+        return {"success": True, "universe": ["510300"], "symbol": "510300", "symbol_name": "测试ETF", "freq": freq,
                 "metrics": {"total_return": 0.2, "annual_return": 0.12, "max_drawdown": -0.10},
-                "equity_curve": [], "trades": [], "strategy": name, "params": params or {}}
+                "equity_curve": [], "trades": [], "strategy": name}
 
     import api.agent.executor as exmod
     monkeypatch.setattr(exmod, "run_backtest", fake_run_backtest)
@@ -204,10 +205,10 @@ def test_cross_turn_register_then_backtest_resolves(monkeypatch, tmp_path):
     provider = FakeProvider([
         LLMResponse(text=None, tool_uses=[
             ToolCall(id="1", name="register_strategy",
-                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
+                     input={"name": "ma", "source": "def handle_data(ctx):\n    pass"}),
         ]),
         LLMResponse(text=None, tool_uses=[
-            ToolCall(id="2", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+            ToolCall(id="2", name="run_backtest", input={"strategy_ref": "ma"}),
         ]),
         LLMResponse(text="完成", tool_uses=[]),
     ])
@@ -240,18 +241,19 @@ def test_same_turn_register_then_backtest_resolves(tmp_path):
         def __init__(self):
             self._strategy_manager = None
             self.jobs = []
-        def submit(self, symbol, strategy_ref, params=None, freq="daily", start="2020-01-01",
+        def submit(self, strategy_ref, universe=None, freq="daily", start="2020-01-01",
                    end="2024-12-31", adjust="qfq"):
-            self.jobs.append({"symbol": symbol, "strategy_ref": strategy_ref, "params": params or {}})
+            self.jobs.append({"strategy_ref": strategy_ref, "universe": universe})
             return len(self.jobs)
         def wait_all(self, timeout=300):
             results = []
             for j in self.jobs:
                 func, name = self._strategy_manager.resolve(j["strategy_ref"])
                 captured["resolved"] = name
-                results.append({"job_id": 1, "symbol": j["symbol"], "status": "done",
+                results.append({"job_id": 1, "strategy": j["strategy_ref"], "universe": j["universe"],
+                                "status": "done",
                                 "result": {"metrics": {"annual_return": 0.12, "max_drawdown": -0.10},
-                                           "symbol_name": "测试ETF"},
+                                           "symbol": "510300", "symbol_name": "测试ETF"},
                                 "error": None})
             self.jobs = []
             return results
@@ -263,8 +265,8 @@ def test_same_turn_register_then_backtest_resolves(tmp_path):
     provider = FakeProvider([
         LLMResponse(text=None, tool_uses=[
             ToolCall(id="1", name="register_strategy",
-                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
-            ToolCall(id="2", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+                     input={"name": "ma", "source": "def handle_data(ctx):\n    pass"}),
+            ToolCall(id="2", name="run_backtest", input={"strategy_ref": "ma"}),
         ]),
         LLMResponse(text="完成", tool_uses=[]),
     ])
@@ -418,7 +420,7 @@ def test_wait_all_error_publishes_error_event_and_returns_report():
 
     provider = FakeProvider([
         LLMResponse(text=None, tool_uses=[
-            ToolCall(id="1", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+            ToolCall(id="1", name="run_backtest", input={"strategy_ref": "ma"}),
         ]),
     ])
     agent = LLMAgent(provider=provider, store=FakeStore(), executor=BoomExecutor(),
@@ -434,8 +436,8 @@ def test_agent_records_tool_calls():
     provider = FakeProvider([
         LLMResponse(text=None, tool_uses=[
             ToolCall(id="1", name="register_strategy",
-                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
-            ToolCall(id="2", name="run_backtest", input={"symbol": "510300", "strategy_ref": "ma"}),
+                     input={"name": "ma", "source": "def handle_data(ctx):\n    pass"}),
+            ToolCall(id="2", name="run_backtest", input={"strategy_ref": "ma"}),
         ]),
         LLMResponse(text="完成", tool_uses=[]),
     ])
@@ -483,7 +485,7 @@ def test_agent_links_strategy_to_session(tmp_path):
     provider = FakeProvider([
         LLMResponse(text=None, tool_uses=[
             ToolCall(id="1", name="register_strategy",
-                     input={"name": "ma", "source": "def strategy(ctx, p):\n    pass"}),
+                     input={"name": "ma", "source": "def handle_data(ctx):\n    pass"}),
         ]),
         LLMResponse(text="完成", tool_uses=[]),
     ])

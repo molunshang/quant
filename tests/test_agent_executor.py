@@ -17,15 +17,18 @@ def make_bars(n=60, start_price=100.0):
     })
 
 
-def _dummy_backtest(symbol, strategy_ref, params=None, freq="daily", start="", end="",
+def _dummy_backtest(strategy, universe=None, freq="daily", start="", end="",
                     adjust="qfq", initial_cash=100_000.0, strategy_manager=None, data_layer=None):
     from api.runner import run_backtest as real
     # Reuse real run_backtest but with a fake data_layer that returns make_bars().
     class FakeDataLayer:
+        def symbol_info(self, symbol):
+            from data.sources import SymbolInfo
+            return SymbolInfo(symbol, symbol, "stock", "sh")
         def get_bars(self, info, freq="daily", start="", end="", adjust="qfq"):
             return make_bars()
     return real(
-        symbol=symbol, strategy_ref=strategy_ref, params=params, freq=freq,
+        strategy=strategy, universe=universe, freq=freq,
         start=start, end=end, adjust=adjust, initial_cash=initial_cash,
         strategy_manager=strategy_manager, data_layer=FakeDataLayer(),
     )
@@ -36,15 +39,15 @@ def test_submit_and_wait_all(monkeypatch):
     monkeypatch.setattr(mod, "run_backtest", _dummy_backtest)
     ex = BacktestExecutor()
     try:
-        j1 = ex.submit("600519", "buy_and_hold", {})
-        j2 = ex.submit("600519", "sma_cross", {"short": 5, "long": 20})
+        j1 = ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
+        j2 = ex.submit("momentum_rotation", universe={"symbols": ["600519"]})
         results = ex.wait_all(timeout=30)
         assert len(results) == 2
         assert results[0]["status"] == "done"
         assert results[0]["result"]["success"] is True
         assert "total_return" in results[0]["result"]["metrics"]
         ex.reset_batch()
-        j3 = ex.submit("600519", "buy_and_hold", {})
+        j3 = ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
         r3 = ex.wait_all(timeout=30)
         assert len(r3) == 1
         assert r3[0]["result"]["success"] is True
@@ -59,20 +62,47 @@ def test_submit_forwards_strategy_manager(monkeypatch):
 
     captured = {}
 
-    def fake_run_backtest(symbol, strategy_ref, params=None, freq="daily", start="", end="",
+    def fake_run_backtest(strategy, universe=None, freq="daily", start="", end="",
                           adjust="qfq", initial_cash=100_000.0, strategy_manager=None, data_layer=None):
         captured["strategy_manager"] = strategy_manager
-        return {"success": True, "symbol": symbol, "symbol_name": "x", "freq": freq,
+        captured["universe"] = universe
+        return {"success": True, "universe": ["600519"], "symbol": "600519", "symbol_name": "x", "freq": freq,
                 "metrics": {"total_return": 0.1}, "equity_curve": [], "trades": [],
-                "strategy": strategy_ref, "params": params or {}}
+                "strategy": strategy}
 
     monkeypatch.setattr(mod, "run_backtest", fake_run_backtest)
     sm = StrategyManager()
     ex = BacktestExecutor(strategy_manager=sm)
     try:
-        ex.submit("600519", "buy_and_hold", {})
+        ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
         results = ex.wait_all(timeout=30)
     finally:
         ex.shutdown()
     assert captured["strategy_manager"] is sm
+    assert captured["universe"] == {"symbols": ["600519"]}
     assert results[0]["status"] == "done"
+
+
+def test_submit_universe_forwarded(monkeypatch):
+    import api.agent.executor as mod
+    captured = {}
+
+    def fake_run_backtest(strategy, universe=None, freq="daily", start="2020-01-01",
+                          end="2024-12-31", adjust="qfq", initial_cash=100_000.0,
+                          commission_rate=0.0003, stamp_duty=0.0005, lot_size=100,
+                          strategy_manager=None, data_layer=None):
+        captured["universe"] = universe
+        captured["strategy"] = strategy
+        return {"success": True, "universe": ["600519"], "symbol": "600519", "freq": freq,
+                "metrics": {"total_return": 0.1}, "equity_curve": [], "trades": [],
+                "strategy": "buy_and_hold"}
+    monkeypatch.setattr(mod, "run_backtest", fake_run_backtest)
+    ex = BacktestExecutor()
+    try:
+        j1 = ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
+        results = ex.wait_all(timeout=30)
+    finally:
+        ex.shutdown()
+    assert results[0]["status"] == "done"
+    assert captured["universe"] == {"symbols": ["600519"]}
+    assert captured["strategy"] == "buy_and_hold"
