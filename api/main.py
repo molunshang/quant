@@ -168,6 +168,22 @@ def meta():
     }
 
 
+@app.get("/api/bars/{symbol}")
+def bars(symbol: str, freq: str = "daily", start: str = "2020-01-01",
+         end: str = "2024-12-31", adjust: str = "qfq"):
+    """Return OHLCV bars for a symbol (for K线 charting)."""
+    from data.sources import DataLayer
+    from data.registry import get_registry
+    info = get_registry().get(symbol)
+    df = DataLayer().get_bars(info, freq=freq, start=start, end=end, adjust=adjust)
+    if df is None or df.empty:
+        raise HTTPException(status_code=404, detail=f"no data for {symbol}")
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    if "factor" in df.columns:
+        cols.append("factor")
+    return {"symbol": symbol, "name": info.name, "bars": df[cols].to_dict("records")}
+
+
 @app.post("/api/data/precache")
 def precache_submit(body: dict):
     symbols = body.get("symbols") or []

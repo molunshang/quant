@@ -116,6 +116,21 @@ def test_backtest_endpoint_with_mock(tmp_path, monkeypatch):
     assert first > 99_000
 
 
+def test_bars_endpoint(monkeypatch):
+    """GET /api/bars/{symbol} returns OHLCV bars (fake data layer, no network)."""
+    import data.sources as ds
+    def fake_get_bars(self, info, freq="daily", start="", end="", adjust="qfq"):
+        return make_bars()
+    monkeypatch.setattr(ds.DataLayer, "get_bars", fake_get_bars)
+    r = client.get("/api/bars/600519")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["symbol"] == "600519"
+    assert len(body["bars"]) > 0
+    first = body["bars"][0]
+    assert {"date", "open", "high", "low", "close", "volume"} <= set(first)
+
+
 def test_precache_api_submit_and_query(monkeypatch):
     import pandas as pd
     from data.precache import manager as pm

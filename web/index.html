@@ -91,7 +91,13 @@
       <div class="tab" data-tab="drawdown">回撤</div>
     </div>
     <div class="chart" id="equityChart"><div id="chartEquity"></div></div>
-    <div class="chart hidden" id="klineChart"><div id="chartKline"></div></div>
+    <div class="chart hidden" id="klineChart">
+      <div style="margin-bottom:8px;">
+        <label for="klineSymbol">标的：</label>
+        <select id="klineSymbol"></select>
+      </div>
+      <div id="chartKline"></div>
+    </div>
     <div class="chart hidden" id="drawdownChart"><div id="chartDrawdown"></div></div>
     <div class="trades">
       <h3 style="font-size:14px;color:var(--muted);margin-bottom:8px;">交易记录</h3>
@@ -136,10 +142,11 @@ document.querySelectorAll('.tab').forEach(tab => {
       $(`${k}Chart`).classList.toggle('hidden', k !== target);
     });
     if (target === 'equity') equityChart?.resize();
-    if (target === 'kline') klineChart?.resize();
+    if (target === 'kline') { if (klineChart) klineChart.resize(); else if (lastBacktest) loadKline($('klineSymbol').value || lastBacktest.universe?.[0]); }
     if (target === 'drawdown') drawdownChart?.resize();
   });
 });
+$('klineSymbol').addEventListener('change', () => loadKline($('klineSymbol').value));
 
 // ---- run backtest ----
 async function runBacktest() {
@@ -187,8 +194,10 @@ async function runBacktest() {
 $('runBtn').addEventListener('click', runBacktest);
 
 // ---- render ----
+let lastBacktest = null;
 function renderResults(data) {
   $('results').style.display = 'flex';
+  lastBacktest = data;
   const m = data.metrics;
   const fmtPct = v => `${(v*100).toFixed(2)}%`;
   const fmtNum = v => Number(v).toFixed(2);
@@ -216,8 +225,8 @@ function renderResults(data) {
 
   // charts
   equityChart = chart('chartEquity', buildEquityOption(data));
-  klineChart = chart('chartKline', buildKlineOption(data));
   drawdownChart = chart('chartDrawdown', buildDrawdownOption(data));
+  populateKlineSymbols(data);
 }
 
 function chart(elId, option) {
@@ -255,15 +264,51 @@ function buildDrawdownOption(data) {
       lineStyle:{color:'#f44336',width:1},areaStyle:{color:'#f44336',opacity:.15}}]
   };
 }
-function buildKlineOption(data) {
-  const eq = data.equity_curve;
-  const dates = eq.map(r=>r.date);
-  // kline from equity curve only carries close — fetch via data api isn't available; use close as all OHLC
-  // Better: reuse trades for markers
-  const ohlc = eq.map(r=>[r.close,r.close,r.close,r.close]);
-  const buys = data.trades.filter(t=>t.side==='buy').map(t=>({name:'买入',coord:[t.date,t.price],value:t.price}));
-  const sells = data.trades.filter(t=>t.side==='sell').map(t=>({name:'卖出',coord:[t.date,t.price],value:t.price}));
+function populateKlineSymbols(data) {
+  const sel = $('klineSymbol');
+  const symbols = data.universe || [];
+  // if the backtest produced no universe list, fall back to symbols seen in trades
+  if (!symbols.length) {
+    const inTrades = new Set(data.trades.map(t=>t.symbol));
+    symbols.push(...inTrades);
+  }
+  sel.innerHTML = '';
+  symbols.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    sel.appendChild(opt);
+  });
+  if (symbols.length) loadKline(symbols[0]);
+}
+
+async function loadKline(symbol) {
+  const data = lastBacktest;
+  if (!data) return;
+  const params = new URLSearchParams({
+    freq: data.freq || 'daily',
+    start: data.metrics ? (data.equity_curve?.[0]?.date || '2020-01-01') : '2020-01-01',
+    end: data.equity_curve?.[data.equity_curve.length-1]?.date || '2024-12-31',
+    adjust: 'qfq',
+  });
+  let bars = [];
+  try {
+    const r = await fetch(`/api/bars/${encodeURIComponent(symbol)}?${params}`);
+    if (r.ok) bars = (await r.json()).bars || [];
+  } catch(e) { /* fall back to equity-curve close */ }
+  const trades = data.trades.filter(t=>t.symbol===symbol);
+  klineChart = chart('chartKline', buildKlineOption(bars, data.equity_curve, trades, symbol));
+}
+
+function buildKlineOption(bars, eq, trades, symbol) {
+  // prefer real per-symbol OHLC bars; fall back to portfolio close as flat OHLC
+  const ohlc = bars.length
+    ? bars.map(r=>[+r.open,+r.close,+r.low,+r.high])
+    : eq.map(r=>[r.close,r.close,r.close,r.close]);
+  const dates = bars.length ? bars.map(r=>r.date) : eq.map(r=>r.date);
+  const buys = trades.filter(t=>t.side==='buy').map(t=>({name:'买入',coord:[t.date,t.price],value:t.price}));
+  const sells = trades.filter(t=>t.side==='sell').map(t=>({name:'卖出',coord:[t.date,t.price],value:t.price}));
   return {
+    title:{text:symbol,left:'center',top:0},
     tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
     grid:{left:50,right:20,top:30,bottom:40}, xAxis:{type:'category',data:dates}, yAxis:{type:'value',scale:true},
     dataZoom:[{type:'inside',start:60,end:100}],
