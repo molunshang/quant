@@ -8,9 +8,12 @@ aligned from lightweight metadata before any full bars are pulled.
 from __future__ import annotations
 
 import os
-import re
 
 from data.sources import CACHE_DIR
+
+# Only these symbol types are tradable; benchmarks (e.g. index_000300) must
+# never leak into the default universe via the cache dir.
+TRADABLE_TYPES = {"stock", "etf", "fund"}
 
 
 def cached_symbols(freq: str = "daily", adjust: str = "qfq",
@@ -30,6 +33,8 @@ def cached_symbols(freq: str = "daily", adjust: str = "qfq",
             continue
         typ, code, f, adj = parts
         if f != freq or adj != adjust:
+            continue
+        if typ not in TRADABLE_TYPES:
             continue
         if types and typ not in types:
             continue

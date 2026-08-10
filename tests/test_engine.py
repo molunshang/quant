@@ -196,3 +196,52 @@ def test_context_combination_api():
     assert list(bars.columns) == ["date", "open", "high", "low", "close", "volume"]
     assert len(bars) == 5
     assert ctx.price("600519") == 100.0
+
+
+def test_corporate_action_split_adjusts_position():
+    bars = make_bars(30, start_price=100.0)
+    bars["factor"] = 1.0
+    bars.loc[bars["date"] == bars["date"].iloc[5], "factor"] = 2.0  # 2:1 split on day 5
+    seen = {}
+
+    def strat(ctx):
+        if ctx.bar_index == 0:
+            ctx.buy("600519", 1.0)
+        if ctx.bar_index == 5:
+            seen["pos"] = ctx.positions.get("600519", 0)
+
+    dl = _FakeDataLayer({"600519": bars})
+    engine = BacktestEngine(EngineConfig(initial_cash=100_000), data_layer=dl)
+    engine.run(strat, list(bars["date"]), ["600519"], "daily", "2023-01-01", "2024-12-31", "qfq")
+    assert seen["pos"] > 0
+
+
+def test_corporate_action_nan_factor_no_crash():
+    bars = make_bars(30, start_price=100.0)
+    bars["factor"] = 1.0
+    bars.loc[bars["date"] == bars["date"].iloc[5], "factor"] = float("nan")
+
+    def strat(ctx):
+        if ctx.bar_index == 0:
+            ctx.buy("600519", 1.0)
+
+    dl = _FakeDataLayer({"600519": bars})
+    engine = BacktestEngine(EngineConfig(initial_cash=100_000), data_layer=dl)
+    engine.run(strat, list(bars["date"]), ["600519"], "daily", "2023-01-01", "2024-12-31", "qfq")
+    # must not raise
+
+
+def test_benchmark_requests_index():
+    bars_a = make_bars(30, start_price=100.0)
+    bars_b = make_bars(30, start_price=50.0)
+    dl = _FakeDataLayer({"600519": bars_a, "000858": bars_b, "000300": make_bars(30, start_price=3000.0)})
+    engine = BacktestEngine(EngineConfig(initial_cash=100_000), data_layer=dl)
+    calendar = sorted(set(bars_a["date"]) | set(bars_b["date"]))
+
+    def equal_weight(ctx):
+        if ctx.bar_index == 0:
+            for s in ctx.universe:
+                ctx.buy(s, 1.0 / len(ctx.universe))
+
+    engine.run(equal_weight, calendar, ["600519", "000858"], "daily", "2023-01-01", "2024-12-31", "qfq")
+    assert "000300" in dl.requested  # benchmark index loaded

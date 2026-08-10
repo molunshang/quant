@@ -1,7 +1,7 @@
 """Portfolio backtest engine: unified calendar, target-weight matching, A-share rules."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
@@ -191,9 +191,9 @@ class BacktestEngine:
             idx = ctx._idx_at_current(symbol)
             if idx <= 0:
                 continue
-            prev = float(df["factor"].iloc[idx - 1]) or 1.0
-            cur = float(df["factor"].iloc[idx]) or 1.0
-            if prev <= 0:
+            prev = float(df["factor"].iloc[idx - 1])
+            cur = float(df["factor"].iloc[idx])
+            if pd.isna(prev) or pd.isna(cur) or prev <= 0:
                 continue
             ratio = cur / prev
             if ratio != 1.0 and ctx.positions[symbol] > 0:
@@ -252,6 +252,7 @@ def compute_metrics(equity_curve: pd.DataFrame, trades: list[dict]) -> dict:
             sharpe = float(np.mean(rets) / std * np.sqrt(annual_factor)) if std > 0 else 0.0
     wins = losses = 0
     open_buys: list[dict] = []
+    trades = [dict(t) for t in trades]  # FIFO matching mutates buy shares; keep caller's trades intact
     for t in trades:
         if t["side"] == "buy":
             open_buys.append(t)

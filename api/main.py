@@ -243,17 +243,19 @@ def _equity_option(res: dict) -> dict:
     dates = [r["date"] for r in eq]
     initial = res["metrics"].get("initial_equity", 1) or 1
     equity_norm = [(r["equity"] / initial - 1) * 100 for r in eq]
-    bench_init = eq[0]["benchmark"] if eq else 1
-    bench_norm = [(r["benchmark"] / bench_init - 1) * 100 for r in eq]
+    bench_init = eq[0]["benchmark"] if eq and eq[0].get("benchmark") is not None else None
+    bench_norm = [(r["benchmark"] / bench_init - 1) * 100 for r in eq] if bench_init else []
+    has_bench = bench_norm != []
     return {
         "title": {"text": "权益曲线 vs 基准", "left": "center"},
         "tooltip": {"trigger": "axis"},
-        "legend": {"data": ["策略", "基准"], "bottom": 0},
+        "legend": {"data": ["策略", "基准"] if has_bench else ["策略"], "bottom": 0},
         "xAxis": {"type": "category", "data": dates},
         "yAxis": {"type": "value", "name": "收益率 %", "axisLabel": {"formatter": "{value}%"}},
         "series": [
             {"name": "策略", "type": "line", "data": [round(v, 3) for v in equity_norm], "smooth": True, "symbol": "none"},
-            {"name": "基准", "type": "line", "data": [round(v, 3) for v in bench_norm], "smooth": True,
-             "symbol": "none", "lineStyle": {"type": "dashed"}},
-        ],
+        ] + (
+            [{"name": "基准", "type": "line", "data": [round(v, 3) for v in bench_norm], "smooth": True,
+              "symbol": "none", "lineStyle": {"type": "dashed"}}] if has_bench else []
+        ),
     }

@@ -241,14 +241,15 @@ function buildEquityOption(data) {
   const initial = data.metrics.initial_equity;
   const s = eq.map(r => (r.equity/initial-1)*100);
   const b0 = eq[0].benchmark;
-  const b = eq.map(r => (r.benchmark/b0-1)*100);
+  const hasBench = typeof b0 === 'number' && isFinite(b0);
+  const b = hasBench ? eq.map(r => (r.benchmark/b0-1)*100) : [];
   return {
-    tooltip:{trigger:'axis'}, legend:{data:['策略','基准'],bottom:0},
+    tooltip:{trigger:'axis'}, legend:{data:hasBench?['策略','基准']:['策略'],bottom:0},
     grid:{left:50,right:20,top:30,bottom:40},
     xAxis:{type:'category',data:dates}, yAxis:{type:'value',name:'%',axisLabel:{formatter:'{value}%'}},
     series:[
       {name:'策略',type:'line',data:s.map(v=>+v.toFixed(3)),smooth:true,symbol:'none',lineStyle:{width:2}},
-      {name:'基准',type:'line',data:b.map(v=>+v.toFixed(3)),smooth:true,symbol:'none',lineStyle:{type:'dashed'}}
+      ...(hasBench ? [{name:'基准',type:'line',data:b.map(v=>+v.toFixed(3)),smooth:true,symbol:'none',lineStyle:{type:'dashed'}}] : [])
     ]
   };
 }
