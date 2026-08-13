@@ -496,3 +496,28 @@ def test_agent_links_strategy_to_session(tmp_path):
     assert len(linked) == 1
     assert linked[0]["name"] == "ma"
     assert linked[0]["version"] == 1
+
+
+def test_system_prompt_training_only_and_validation_hidden():
+    goal = {"constraints": {"annual_return": 0.10},
+            "period": {"start": "2020-01-01", "end": "2024-12-31"},
+            "validation_periods": [{"start": "2025-01-01", "end": "2025-12-31"}],
+            "universe": ["沪深300"]}
+    prompt = build_system_prompt(goal)
+    assert "训练段" in prompt
+    assert "验证段" in prompt
+    assert "2025-01-01" not in prompt  # 验证段日期对 LLM 隐藏
+
+
+def test_agent_run_sets_ctx_goal_and_training_period():
+    from api.agent.tools import AgentToolContext
+    from api.agent.agent import LLMAgent
+
+    provider = FakeProvider([])
+    agent = LLMAgent(provider=provider, store=FakeStore(), executor=FakeExecutor())
+    goal = {"constraints": {"annual_return": 0.10},
+            "period": {"start": "2020-01-01", "end": "2024-12-31"},
+            "validation_periods": [{"start": "2025-01-01", "end": "2025-12-31"}]}
+    agent.run("s1", "在沪深300做到年化10%", goal=goal)
+    assert agent._ctx.goal == goal
+    assert agent._ctx.training_period == {"start": "2020-01-01", "end": "2024-12-31"}

@@ -19,9 +19,9 @@ def build_system_prompt(goal: str | dict | None = None) -> str:
         "你是A股量化策略优化助手。用户给出投资目标（如年化收益、超额收益、最大回撤）。",
         "你的工作流程：",
         "1. 用 register_strategy 编写/修改组合策略草稿。源码定义 def initialize(ctx)（可选，一次初始化）+ def handle_data(ctx)（每个交易日调用一次）。用 ctx.history(symbol, lookback) 读取各标的截至当前 bar 的历史、ctx.price(symbol)、ctx.positions、ctx.cash、ctx.total_value 分析行情与持仓；用 ctx.buy(symbol, pct) / ctx.sell(symbol, pct) 下单（pct 相对组合净值 0~1，返回 bool；sell 默认清仓）。标的由策略自己在 ctx.universe 里选。引擎按 A 股规则成交：T+1、涨跌停、100 股整手。指标助手 sma/ema/rsi/macd 已内置可直接调用（无需 import）；也可 import math/numpy/pandas（常用别名 math/np/pd）。",
-        "2. 用 run_backtest 提交组合回测（strategy_ref 用当前草稿名），可传 universe 限制标的池（缺省=已缓存标的集），可一次提交多个并行。",
-        "3. 查看回测指标，用 check_goal 校验是否达标。未达标则修改草稿再回测。",
-        "4. 达标后必须用 publish_strategy（goal_met=true）发布。",
+        "2. 用 run_backtest 提交组合回测（strategy_ref 用当前草稿名），可传 universe 限制标的池（缺省=已缓存标的集），可一次提交多个并行。回测只能跑训练段区间（即目标区间的 start~end）；验证段由系统在发布时自动验收，禁止（也无法）直接回测验证段。",
+        "3. 查看回测指标，用 check_goal 校验是否达标；未达标可先用 diagnose_backtest(job_id) 深挖原因（月度收益、回撤起止、标的盈亏归因），再修改草稿重跑。",
+        "4. 达标后必须用 publish_strategy（goal_met=true）发布。发布时系统自动在未见过的验证段上做期末考，任一验证段不达标都会拒绝发布并反馈差距，Agent 回到训练段继续调优。",
         "工具结果会被合并到下一轮。达成目标后给出简短中文汇报。",
     ]
     if goal:
@@ -31,7 +31,8 @@ def build_system_prompt(goal: str | dict | None = None) -> str:
             if c:
                 lines.append(f"目标约束（必须满足，check_goal 用这些阈值校验）：{json.dumps(c, ensure_ascii=False)}")
             if goal.get("universe"):
-                lines.append(f"标的池范围（策略在 universe 内自选标的）：{'、'.join(goal['universe'])}")
+                lines.append(f"标的池范围（策略在 universe 内自选标的）：{'、'.join(goal['universe'])}"
+                             "（指数/行业名可用 list_symbols(index=...) 或 list_symbols(industry=...) 展开成具体标的；list_industries 可查行业）")
             p = goal.get("period")
             if p:
                 lines.append(f"回测时间区间：{p.get('start')} 至 {p.get('end')}（run_backtest 的 start/end 使用此区间）")
@@ -63,7 +64,9 @@ def _result_to_text(res: dict) -> str:
         return f"回测 job #{res.get('job_id')} 失败: {res.get('error')}"
     m = r.get("metrics", {})
     keep = {k: m.get(k) for k in
-            ("total_return", "annual_return", "max_drawdown", "sharpe", "volatility", "win_rate", "n_trades")}
+            ("total_return", "annual_return", "max_drawdown", "sharpe", "volatility",
+             "win_rate", "n_trades", "excess_return", "calmar", "sortino", "turnover",
+             "avg_holdings", "max_concentration", "monthly_win_rate")}
     return json.dumps({
         "job_id": res.get("job_id"),
         "symbol": r.get("symbol"),
@@ -135,11 +138,16 @@ class LLMAgent:
             "list_strategies": T.list_strategies,
             "publish_strategy": T.publish_strategy,
             "check_goal": T.check_goal,
+            "list_industries": T.list_industries,
+            "query_sector_perf": T.query_sector_perf,
+            "diagnose_backtest": T.diagnose_backtest,
         }[name]
 
     def run(self, session_id: str, user_message: str, goal: str | None = None,
             bus: EventBus | None = None, message_id: int | None = None) -> dict:
         self._ctx.session_id = session_id
+        self._ctx.goal = goal if isinstance(goal, dict) else {}
+        self._ctx.training_period = goal.get("period") if isinstance(goal, dict) else None
         system = build_system_prompt(goal or user_message)
         # messages: user goal first, then alternating assistant tool_calls / user
         # tool_results as the loop runs. These are PROVIDER-NEUTRAL shapes; each
