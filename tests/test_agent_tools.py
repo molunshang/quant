@@ -8,11 +8,14 @@ import pytest
 from api.agent.tools import (
     AgentToolContext,
     TOOLS,
+    check_goal,
+    diagnose_backtest,
+    list_industries,
     list_symbols,
+    publish_strategy,
+    query_sector_perf,
     register_strategy,
     run_backtest,
-    check_goal,
-    publish_strategy,
 )
 
 
@@ -155,3 +158,70 @@ def test_publish_requires_goal_met(tmp_path):
         c,
     ))
     assert out["status"] == "published"
+
+
+def test_run_backtest_rejects_outside_training_period(tmp_path):
+    c = _ctx(tmp_path)
+    c.training_period = {"start": "2020-01-01", "end": "2024-12-31"}
+    with pytest.raises(Exception):
+        run_backtest({"strategy_ref": "ma", "start": "2025-01-01", "end": "2025-12-31"}, c)
+    # 训练段内正常提交
+    run_backtest({"strategy_ref": "ma", "start": "2021-01-01", "end": "2023-12-31"}, c)
+    assert len(c.executor.submitted) == 1
+
+
+def test_list_symbols_with_index(monkeypatch, tmp_path):
+    import api.agent.tools as T
+    monkeypatch.setattr(T, "index_constituents", lambda code: [
+        {"code": "600519", "name": "贵州茅台", "weight": 5.0},
+        {"code": "000001", "name": "平安银行", "weight": 3.0},
+    ])
+    c = _ctx(tmp_path)
+    out = json.loads(T.list_symbols({"index": "000300"}, c))
+    assert [s["code"] for s in out["symbols"]] == ["600519", "000001"]
+    assert out["symbols"][0]["name"] == "贵州茅台"
+
+
+def test_list_industries_tool(monkeypatch, tmp_path):
+    import api.agent.tools as T
+    monkeypatch.setattr(T, "list_sw_industries", lambda: [
+        {"code": "801080.SI", "name": "电子", "n_stocks": 495},
+    ])
+    c = _ctx(tmp_path)
+    out = json.loads(T.list_industries({}, c))
+    assert out["industries"][0]["name"] == "电子"
+
+
+def test_query_sector_perf(monkeypatch, tmp_path):
+    import akshare as ak
+    import pandas as pd
+    df = pd.DataFrame({
+        "date": ["2026-06-01", "2026-08-01"],
+        "open": [1.0, 1.1], "high": [1.1, 1.2], "low": [0.9, 1.0],
+        "close": [100.0, 110.0], "volume": [1, 1],
+    })
+    monkeypatch.setattr(ak, "stock_zh_index_daily", lambda symbol: df)
+    c = _ctx(tmp_path)
+    out = json.loads(query_sector_perf({"code": "000300", "days": 60}, c))
+    assert out["return_pct"] == pytest.approx(0.10)
+    assert out["start"] == "2026-06-01"
+
+
+def test_diagnose_backtest_tool(tmp_path):
+    class Ex:
+        def __init__(self):
+            self.jobs = {7: {"job_id": 7, "result": {
+                "equity_curve": [{"date": "2025-01-02", "equity": 100.0, "n_positions": 1,
+                                  "max_concentration": 1.0},
+                                 {"date": "2025-01-03", "equity": 110.0, "n_positions": 1,
+                                  "max_concentration": 1.0}],
+                "trades": [],
+            }}}
+        def get_job(self, job_id):
+            return self.jobs.get(job_id)
+
+    c = AgentToolContext(store=None, executor=Ex())
+    out = json.loads(diagnose_backtest({"job_id": 7}, c))
+    assert "monthly_returns" in out
+    assert "drawdown_analysis" in out
+    assert "symbol_attribution" in out

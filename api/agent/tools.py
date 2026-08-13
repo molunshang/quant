@@ -3,18 +3,23 @@ from __future__ import annotations
 
 import json
 
-from data.registry import get_registry
+from data.indices import index_constituents, resolve_index
+from data.industry import industry_constituents, list_industries as list_sw_industries
+from data.registry import _exchange, get_registry
+from data.sources import SymbolInfo
 from strategies.base import load_strategy_from_source
 from strategies.manager import StrategyManager
 
 
 class AgentToolContext:
-    def __init__(self, store, executor, data_layer=None, strategy_manager=None, session_id=None):
+    def __init__(self, store, executor, data_layer=None, strategy_manager=None,
+                 session_id=None, training_period=None):
         self.store = store
         self.executor = executor
         self.data_layer = data_layer
         self.strategy_manager = strategy_manager or StrategyManager()
         self.session_id = session_id
+        self.training_period = training_period
 
 
 def _json(obj) -> str:
@@ -22,10 +27,20 @@ def _json(obj) -> str:
 
 
 def list_symbols(input_: dict, ctx: AgentToolContext) -> str:
-    reg = get_registry()
     typ = input_.get("type")
     keyword = input_.get("keyword")
-    items = reg.list(typ)
+    index_code = input_.get("index")
+    industry = input_.get("industry")
+    items = None
+    if index_code:
+        code = resolve_index(index_code) or index_code
+        items = [SymbolInfo(c["code"], c["name"], "stock", _exchange(c["code"]))
+                 for c in index_constituents(code)]
+    elif industry:
+        items = [SymbolInfo(c["code"], c["name"], "stock", _exchange(c["code"]))
+                 for c in industry_constituents(industry)]
+    else:
+        items = get_registry().list(typ)
     if keyword:
         kw = keyword.strip().lower()
         items = [s for s in items if kw in s.code.lower() or kw in s.name.lower()]
@@ -35,12 +50,19 @@ def list_symbols(input_: dict, ctx: AgentToolContext) -> str:
 
 def run_backtest(input_: dict, ctx: AgentToolContext) -> str:
     strategy_ref = input_.get("strategy_ref", input_.get("strategy", "buy_and_hold"))
+    start = input_.get("start", "2020-01-01")
+    end = input_.get("end", "2024-12-31")
+    tp = getattr(ctx, "training_period", None)
+    if tp and not (tp.get("start", "") <= start and end <= tp.get("end", "")):
+        raise ValueError(
+            f"run_backtest 只能在训练段 {tp.get('start')}~{tp.get('end')} 内回测"
+            "（防过拟合：验证段由系统在发布时自动验收，禁止直接运行）")
     job_id = ctx.executor.submit(
         strategy_ref=strategy_ref,
         universe=input_.get("universe"),
         freq=input_.get("freq", "daily"),
-        start=input_.get("start", "2020-01-01"),
-        end=input_.get("end", "2024-12-31"),
+        start=start,
+        end=end,
         adjust=input_.get("adjust", "qfq"),
     )
     return _json({"job_id": job_id, "status": "running", "strategy": strategy_ref})
@@ -58,6 +80,45 @@ def register_strategy(input_: dict, ctx: AgentToolContext) -> str:
 
 def list_strategies(input_: dict, ctx: AgentToolContext) -> str:
     return _json({"strategies": ctx.store.list_strategies()})
+
+
+def list_industries(input_: dict, ctx: AgentToolContext) -> str:
+    return _json({"industries": list_sw_industries()})
+
+
+def query_sector_perf(input_: dict, ctx: AgentToolContext) -> str:
+    """近 N 日涨跌幅 for an index or SW industry. Best-effort."""
+    code = input_.get("code")
+    days = int(input_.get("days", 60))
+    if not code:
+        raise ValueError("code required (index code like 000300, or SW industry like 801080.SI)")
+    index_code = resolve_index(code) or str(code).replace(".SI", "").replace(".si", "")
+    prefix = "sz" if index_code.startswith("39") else "sh"
+    import akshare as ak
+
+    df = ak.stock_zh_index_daily(symbol=f"{prefix}{index_code}")
+    df = df.tail(days)
+    if df.empty:
+        return _json({"code": code, "days": days, "return_pct": None})
+    ret = float(df["close"].iloc[-1]) / float(df["close"].iloc[0]) - 1
+    return _json({
+        "code": code, "days": days,
+        "return_pct": round(ret, 6),
+        "start": str(df["date"].iloc[0]), "end": str(df["date"].iloc[-1]),
+    })
+
+
+def diagnose_backtest(input_: dict, ctx: AgentToolContext) -> str:
+    job_id = int(input_.get("job_id"))
+    job = ctx.executor.get_job(job_id)
+    if job is None:
+        raise KeyError(f"job {job_id} 不在已完成结果中（先 run_backtest 并等它完成）")
+    result = job.get("result")
+    if not result:
+        raise ValueError(f"job {job_id} 无可用结果")
+    from engine.diagnose import diagnose
+
+    return _json(diagnose(result.get("equity_curve"), result.get("trades")))
 
 
 def publish_strategy(input_: dict, ctx: AgentToolContext) -> str:
@@ -112,18 +173,20 @@ def check_goal(input_: dict, ctx: AgentToolContext) -> str:
 TOOLS: list[dict] = [
     {
         "name": "list_symbols",
-        "description": "List tradable symbols (stocks/funds/ETFs). Optional type ('stock'|'etf'|'fund') and keyword filter. Use to choose which symbol(s) to backtest. Returns up to 20 matches, each {code, name, type}.",
+        "description": "List tradable symbols (stocks/funds/ETFs), or constituents of an index (index=) or SW industry (industry=). Optional type ('stock'|'etf'|'fund') and keyword filter. Use to choose which symbol(s) to backtest. Returns up to 20 matches, each {code, name, type}.",
         "parameters": {
             "type": "object",
             "properties": {
                 "type": {"type": "string", "enum": ["stock", "etf", "fund"], "description": "Symbol type filter"},
                 "keyword": {"type": "string", "description": "Code or name keyword"},
+                "index": {"type": "string", "description": "Index code or name (e.g. 000300 or 沪深300) to list its constituent stocks."},
+                "industry": {"type": "string", "description": "SW industry code (e.g. 801080.SI) to list its constituent stocks."},
             },
         },
     },
     {
         "name": "run_backtest",
-        "description": "Submit a portfolio backtest job asynchronously. Returns {job_id, status, strategy}. Submit multiple in one turn to run in parallel; the agent waits for all to finish before continuing. strategy_ref is a strategy NAME (the current draft) — call register_strategy first to create/update the draft. The strategy picks its own symbols from the universe (默认=已缓存标的集); universe is optional to restrict the pool.",
+        "description": "Submit a portfolio backtest job asynchronously. Returns {job_id, status, strategy}. Submit multiple in one turn to run in parallel; the agent waits for all to finish before continuing. strategy_ref is a strategy NAME (the current draft) — call register_strategy first to create/update the draft. The strategy picks its own symbols from the universe (默认=已缓存标的集); universe is optional to restrict the pool. Backtests are restricted to the training period (防过拟合：验证段由系统在发布时自动验收，禁止直接运行); start/end must lie within it.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -154,6 +217,34 @@ TOOLS: list[dict] = [
         "name": "list_strategies",
         "description": "List registered strategies (drafts + published), each {name, status, current_version}. Use to confirm a draft name before running a backtest.",
         "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_industries",
+        "description": "List SW (申万) first-level industries, each {code, name, n_stocks}. Use to pick a sector as the backtest universe.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "query_sector_perf",
+        "description": "Return the trailing N-day return (%) of an index or SW industry (code: index code like 000300, or SW industry like 801080.SI). Use to see which sectors have been strong recently.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Index code (000300) or SW industry code (801080.SI)."},
+                "days": {"type": "integer", "description": "Trailing days, default 60."},
+            },
+            "required": ["code"],
+        },
+    },
+    {
+        "name": "diagnose_backtest",
+        "description": "Deep-diagnose a completed backtest by job_id: monthly returns, drawdown peak/trough, per-symbol profit attribution, holdings history, benchmark comparison. Call when a backtest misses its goal to understand WHY before revising the strategy.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "integer", "description": "The job_id returned by run_backtest."},
+            },
+            "required": ["job_id"],
+        },
     },
     {
         "name": "publish_strategy",
