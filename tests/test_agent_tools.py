@@ -225,3 +225,36 @@ def test_diagnose_backtest_tool(tmp_path):
     assert "monthly_returns" in out
     assert "drawdown_analysis" in out
     assert "symbol_attribution" in out
+
+
+def test_publish_validation_gate_rejects(tmp_path):
+    c = _ctx(tmp_path)
+    register_strategy({"name": "ma", "source": "def handle_data(ctx):\n    pass"}, c)
+    c.goal = {"constraints": {"annual_return": 0.10},
+              "validation_periods": [{"start": "2025-01-01", "end": "2025-12-31"}]}
+    c.validation_runner = lambda period, universe: {"annual_return": 0.03}
+    with pytest.raises(Exception) as e:
+        publish_strategy({"name": "ma", "goal_met": True}, c)
+    assert "验证段" in str(e.value)
+
+
+def test_publish_validation_gate_passes(tmp_path):
+    c = _ctx(tmp_path)
+    register_strategy({"name": "ma", "source": "def handle_data(ctx):\n    pass"}, c)
+    c.goal = {"constraints": {"annual_return": 0.10},
+              "validation_periods": [{"start": "2025-01-01", "end": "2025-12-31"}]}
+    c.validation_runner = lambda period, universe: {"annual_return": 0.12}
+    out = json.loads(publish_strategy(
+        {"name": "ma", "goal_met": True, "metrics": {"annual_return": 0.12}}, c))
+    assert out["status"] == "published"
+    assert out["metrics"]["validation_metrics"][0]["period"]["start"] == "2025-01-01"
+
+
+def test_validate_strategy_on_periods_pure():
+    from api.agent.tools import validate_strategy_on_periods
+    vp = [{"start": "2025-01-01", "end": "2025-12-31"}]
+    vm, fail = validate_strategy_on_periods(
+        "ma", "def handle_data(ctx): pass", {"annual_return": 0.10}, vp,
+        runner=lambda period, universe: {"annual_return": 0.05})
+    assert fail == [{"period": vp[0], "unmet": ["annual_return: 0.05 < 0.1"]}]
+    assert vm[0]["metrics"]["annual_return"] == 0.05

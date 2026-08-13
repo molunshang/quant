@@ -13,13 +13,15 @@ from strategies.manager import StrategyManager
 
 class AgentToolContext:
     def __init__(self, store, executor, data_layer=None, strategy_manager=None,
-                 session_id=None, training_period=None):
+                 session_id=None, training_period=None, goal=None, validation_runner=None):
         self.store = store
         self.executor = executor
         self.data_layer = data_layer
         self.strategy_manager = strategy_manager or StrategyManager()
         self.session_id = session_id
         self.training_period = training_period
+        self.goal = goal
+        self.validation_runner = validation_runner
 
 
 def _json(obj) -> str:
@@ -131,10 +133,26 @@ def publish_strategy(input_: dict, ctx: AgentToolContext) -> str:
         raise KeyError(f"unknown strategy: {name}")
     if version is None:
         version = g["current_version"]
+    goal = getattr(ctx, "goal", None) or {}
+    constraints = goal.get("constraints") or {}
+    validation_periods = goal.get("validation_periods") or []
+    source = ctx.store.get_source(name, int(version))
+    universe = input_.get("universe")
+    runner = getattr(ctx, "validation_runner", None) or make_validation_runner(ctx, name, source)
+    validation_metrics, failures = validate_strategy_on_periods(
+        name, source, constraints, validation_periods,
+        runner=runner, universe=universe,
+    )
+    if failures:
+        raise ValueError(
+            "验证段不达标，拒绝发布（防过拟合）："
+            + json.dumps(failures, ensure_ascii=False)
+            + " 请回到训练段继续调优后再试")
     rec = ctx.store.publish_version(
         name, int(version),
         metrics=input_.get("metrics", {}),
         goal=input_.get("goal", ""),
+        validation_metrics=validation_metrics,
     )
     return _json(rec)
 
@@ -142,10 +160,8 @@ def publish_strategy(input_: dict, ctx: AgentToolContext) -> str:
 _DRAWDOWN_KEYS = ("max_drawdown",)
 
 
-def check_goal(input_: dict, ctx: AgentToolContext) -> str:
-    """LLM supplies metrics + constraints; code verifies each constraint."""
-    metrics = input_.get("metrics", {})
-    constraints = input_.get("constraints", {})
+def evaluate_constraints(metrics: dict, constraints: dict) -> list[str]:
+    """Return list of unmet constraint descriptions. Empty means all met."""
     unmet = []
     for key, threshold in constraints.items():
         val = metrics.get(key)
@@ -156,18 +172,62 @@ def check_goal(input_: dict, ctx: AgentToolContext) -> str:
             unmet.append(f"{key}: bad threshold")
             continue
         if key in _DRAWDOWN_KEYS:
-            # max_drawdown is a loss metric: a smaller magnitude is better. A
-            # strategy meets its drawdown limit when |val| <= |threshold|, so a
-            # positive threshold (e.g. 0.15) means the same limit as -0.15.
+            # max_drawdown is a loss metric: meet when |val| <= |threshold|
             if not abs(float(val)) <= abs(float(threshold)):
                 unmet.append(f"{key}: |{val}| > |{threshold}|")
         else:
-            # return-style metrics (total_return, annual_return, sharpe,
-            # win_rate): bigger is better (lower-bound constraint).
             if not float(val) >= float(threshold):
                 unmet.append(f"{key}: {val} < {threshold}")
-    met = not unmet
-    return _json({"met": met, "unmet": unmet, "metrics": metrics})
+    return unmet
+
+
+def check_goal(input_: dict, ctx: AgentToolContext) -> str:
+    """LLM supplies metrics + constraints; code verifies each constraint."""
+    metrics = input_.get("metrics", {})
+    constraints = input_.get("constraints", {})
+    unmet = evaluate_constraints(metrics, constraints)
+    return _json({"met": not unmet, "unmet": unmet, "metrics": metrics})
+
+
+def validate_strategy_on_periods(strategy_name, source, constraints, validation_periods,
+                                 runner, universe=None):
+    """Run the strategy on each validation period, check constraints.
+
+    runner(period: dict, universe) -> backtest metrics dict.
+    Returns (validation_metrics, failures):
+      - validation_metrics: [{period, metrics}] for every period that ran
+      - failures: [{period, unmet|error}] for every period that failed
+    """
+    validation_metrics = []
+    failures = []
+    for vp in validation_periods:
+        try:
+            metrics = runner(vp, universe)
+        except Exception as e:  # noqa: BLE001 - surface per-period error
+            failures.append({"period": vp, "error": str(e)})
+            continue
+        unmet = evaluate_constraints(metrics, constraints)
+        validation_metrics.append({"period": vp, "metrics": metrics})
+        if unmet:
+            failures.append({"period": vp, "unmet": unmet})
+    return validation_metrics, failures
+
+
+def make_validation_runner(ctx, name, source):
+    """Real validation runner: registers the strategy source and runs a backtest
+    over a period via api.runner. Network-backed — tests inject ctx.validation_runner."""
+    def runner(period, universe):
+        ctx.strategy_manager.register(name, source)
+        from api.runner import run_backtest
+
+        res = run_backtest(
+            strategy=name, universe=universe, freq="daily",
+            start=period["start"], end=period["end"], adjust="qfq",
+            initial_cash=ctx.executor.initial_cash,
+            strategy_manager=ctx.strategy_manager,
+        )
+        return res["metrics"]
+    return runner
 
 
 TOOLS: list[dict] = [
@@ -248,13 +308,14 @@ TOOLS: list[dict] = [
     },
     {
         "name": "publish_strategy",
-        "description": "Publish a strategy version ONLY when the goal is met. Requires goal_met=true. Records the metrics snapshot. Call check_goal first to confirm.",
+        "description": "Publish a strategy version ONLY when the goal is met AND all hidden validation periods pass. Requires goal_met=true. On publish the system automatically runs the strategy on every validation period (unseen by the agent); if any validation period misses the goal constraints, publish is rejected with the shortfalls. Pass the same universe you used for the winning training backtest.",
         "parameters": {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Registered strategy name (the draft to publish)"},
                 "version": {"type": "integer", "description": "Optional; defaults to current draft version"},
                 "goal_met": {"type": "boolean", "description": "Must be true to publish"},
+                "universe": {"type": "object", "description": "Optional; the universe the winning training backtest used, e.g. {\"symbols\": [...]}. Validation runs on this pool."},
                 "metrics": {"type": "object", "description": "Metrics snapshot at publish time, e.g. the backtest metrics that met the goal"},
                 "goal": {"type": "string", "description": "The user goal this version satisfies (recorded for the report)"},
             },

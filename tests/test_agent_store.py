@@ -173,3 +173,18 @@ def test_get_many(tmp_path):
     assert got["s1"]["status"] == "running"
     assert got["s2"]["status"] == "done"
     assert got["s3"] is None
+
+
+def test_publish_version_with_validation_metrics(tmp_path):
+    s = StrategyStore(db_path=str(tmp_path / "t.db"))
+    s.register_draft("ma", "def handle_data(ctx):\n    pass", "sma")
+    pub = s.publish_version(
+        "ma", 1, {"total_return": 0.2}, "年化>=10%",
+        validation_metrics=[{"period": {"start": "2025-01-01", "end": "2025-12-31"},
+                             "metrics": {"total_return": 0.1}}],
+    )
+    assert pub["status"] == "published"
+    assert pub["metrics"]["validation_metrics"][0]["metrics"]["total_return"] == 0.1
+    g = s.get_strategy("ma")
+    assert g["versions"][0]["metrics"]["validation_metrics"][0]["period"]["start"] == "2025-01-01"
+    s.close()

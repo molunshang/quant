@@ -151,7 +151,8 @@ class StrategyStore:
         return out
 
     @_synchronized
-    def publish_version(self, name: str, version: int, metrics: dict, goal: str) -> dict:
+    def publish_version(self, name: str, version: int, metrics: dict, goal: str,
+                        validation_metrics: list[dict] | None = None) -> dict:
         sid_row = self.conn.execute(
             "SELECT id FROM strategies WHERE name = ?", (name,)
         ).fetchone()
@@ -164,17 +165,20 @@ class StrategyStore:
         ).fetchone()
         if row is None:
             raise KeyError(f"strategy {name!r} has no version {version}")
+        store_metrics = dict(metrics)
+        if validation_metrics:
+            store_metrics["validation_metrics"] = validation_metrics
         now = _now()
         self.conn.execute(
             "UPDATE strategy_versions SET status='published', metrics_json=?, goal=?, published_at=? WHERE id=?",
-            (json.dumps(metrics), goal, now, row["id"]),
+            (json.dumps(store_metrics), goal, now, row["id"]),
         )
         self.conn.execute(
             "UPDATE strategies SET status='published', updated_at=? WHERE id=?",
             (now, sid),
         )
         self.conn.commit()
-        return {"name": name, "version": version, "status": "published", "metrics": metrics}
+        return {"name": name, "version": version, "status": "published", "metrics": store_metrics}
 
     @_synchronized
     def link_session_strategy(self, session_id, name, version) -> None:
