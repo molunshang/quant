@@ -80,6 +80,12 @@ class BacktestEngine:
             # the current bar's close (eager matching) under A-share rules.
             # Built-ins sell-then-buy so cash from sells is available to buys.
             strategy(ctx)
+            holdings = list(ctx.positions)
+            n_positions = len(holdings)
+            max_conc = 0.0
+            if n_positions and ctx.total_value > 0:
+                vals = [ctx.positions[s] * ctx.price(s) for s in holdings]
+                max_conc = max(vals) / ctx.total_value
             equity_rows.append({
                 "date": str(day),
                 "cash": ctx.cash,
@@ -87,6 +93,8 @@ class BacktestEngine:
                 "market_value": ctx.market_value,
                 "equity": ctx.total_value,
                 "benchmark": benchmark.get(str(day)),
+                "n_positions": n_positions,
+                "max_concentration": max_conc,
             })
 
         equity_df = pd.DataFrame(equity_rows)
@@ -274,6 +282,45 @@ def compute_metrics(equity_curve: pd.DataFrame, trades: list[dict]) -> dict:
                 losses += 1
     n_closed = wins + losses
     win_rate = wins / n_closed if n_closed else 0.0
+    # ---- extended diagnosis metrics ----
+    benchmark = eq["benchmark"].astype(float) if "benchmark" in eq.columns else None
+    excess_return = 0.0
+    if benchmark is not None and benchmark.notna().any():
+        b = benchmark.dropna()
+        if len(b) >= 2 and b.iloc[0] > 0:
+            excess_return = total_return - (b.iloc[-1] / b.iloc[0] - 1)
+    calmar = annual_return / abs(max_drawdown) if max_drawdown < 0 else 0.0
+    sortino = 0.0
+    if n > 2:
+        rets = np.diff(equity) / equity[:-1]
+        rets = rets[np.isfinite(rets)]
+        downside = rets[rets < 0]
+        if len(downside) > 1:
+            dstd = np.std(downside, ddof=1)
+            if dstd > 0:
+                sortino = float(np.mean(rets) / dstd * np.sqrt(annual_factor))
+    turnover = 0.0
+    if trades and n:
+        total_amount = sum(abs(float(t.get("amount", 0))) for t in trades)
+        avg_equity = float(np.mean(equity))
+        if avg_equity > 0:
+            turnover = total_amount / len(equity) * 252.0 / avg_equity
+    if "n_positions" in eq.columns and eq["n_positions"].notna().any():
+        avg_holdings = float(np.mean(eq["n_positions"]))
+    else:
+        avg_holdings = 0.0
+    if "max_concentration" in eq.columns and eq["max_concentration"].notna().any():
+        max_concentration = float(eq["max_concentration"].max())
+    else:
+        max_concentration = 0.0
+    monthly_win_rate = 0.0
+    if n > 1:
+        _df = eq.copy()
+        _df["ym"] = pd.to_datetime(_df["date"]).dt.to_period("M")
+        _monthly_end = _df.groupby("ym")["equity"].last()
+        _monthly_ret = _monthly_end.pct_change().dropna()
+        if len(_monthly_ret):
+            monthly_win_rate = float((_monthly_ret > 0).mean())
     return {
         "total_return": total_return, "annual_return": annual_return,
         "max_drawdown": max_drawdown, "volatility": vol, "sharpe": sharpe,
@@ -281,5 +328,8 @@ def compute_metrics(equity_curve: pd.DataFrame, trades: list[dict]) -> dict:
         "n_buys": sum(1 for t in trades if t["side"] == "buy"),
         "n_sells": sum(1 for t in trades if t["side"] == "sell"),
         "win_rate": win_rate, "final_equity": final, "initial_equity": initial,
+        "excess_return": excess_return, "calmar": calmar, "sortino": sortino,
+        "turnover": turnover, "avg_holdings": avg_holdings,
+        "max_concentration": max_concentration, "monthly_win_rate": monthly_win_rate,
         "equity_curve": eq.to_dict("records"), "trades": trades,
     }

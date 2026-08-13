@@ -245,3 +245,28 @@ def test_benchmark_requests_index():
 
     engine.run(equal_weight, calendar, ["600519", "000858"], "daily", "2023-01-01", "2024-12-31", "qfq")
     assert "000300" in dl.requested  # benchmark index loaded
+
+
+def test_extended_metrics_present():
+    bars_a = make_bars(80, start_price=100.0)
+    bars_b = make_bars(80, start_price=50.0)
+    dl = _FakeDataLayer({"600519": bars_a, "000858": bars_b})
+    engine = BacktestEngine(EngineConfig(initial_cash=100_000), data_layer=dl)
+    calendar = sorted(set(bars_a["date"]) | set(bars_b["date"]))
+
+    def equal_weight(ctx):
+        if ctx.bar_index == 0:
+            for s in ctx.universe:
+                ctx.buy(s, 1.0 / len(ctx.universe))
+
+    result = engine.run(equal_weight, calendar, ["600519", "000858"], "daily",
+                        "2023-01-01", "2024-12-31", "qfq")
+    m = result.metrics
+    for key in ("excess_return", "calmar", "sortino", "turnover",
+                "avg_holdings", "max_concentration", "monthly_win_rate"):
+        assert key in m, key
+        assert isinstance(m[key], float)
+    # n_positions 列已记录，且等权持有两只标的 -> 平均持仓数 > 0
+    assert "n_positions" in result.equity_curve.columns
+    assert m["avg_holdings"] > 0
+    assert 0.0 <= m["max_concentration"] <= 1.0
