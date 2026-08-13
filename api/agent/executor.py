@@ -28,6 +28,7 @@ class BacktestExecutor:
         self._jobs: dict[int, BacktestJob] = {}
         self._futures: list[concurrent.futures.Future] = []
         self._order: list[int] = []
+        self._completed: dict[int, dict] = {}
 
     def submit(self, strategy_ref, universe=None, freq="daily", start="2020-01-01",
                end="2024-12-31", adjust="qfq") -> int:
@@ -68,7 +69,7 @@ class BacktestExecutor:
         self._futures = []
         self._order = []
         self._jobs = {}
-        return [
+        out = [
             {
                 "job_id": j.id,
                 "strategy": j.strategy,
@@ -79,6 +80,18 @@ class BacktestExecutor:
             }
             for j in results
         ]
+        # retain for diagnose_backtest; cap size so a long-running server
+        # doesn't accumulate unboundedly.
+        for r in out:
+            self._completed[r["job_id"]] = r
+        if len(self._completed) > 50:
+            for k in sorted(self._completed)[:-50]:
+                del self._completed[k]
+        return out
+
+    def get_job(self, job_id: int) -> dict | None:
+        """Return a previously completed job's result dict, or None."""
+        return self._completed.get(job_id)
 
     def reset_batch(self):
         """Clear any remaining batch state (safe no-op if already drained)."""

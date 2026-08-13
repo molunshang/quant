@@ -106,3 +106,18 @@ def test_submit_universe_forwarded(monkeypatch):
     assert results[0]["status"] == "done"
     assert captured["universe"] == {"symbols": ["600519"]}
     assert captured["strategy"] == "buy_and_hold"
+
+
+def test_get_job_returns_completed_result(monkeypatch):
+    import api.agent.executor as mod
+    monkeypatch.setattr(mod, "run_backtest", _dummy_backtest)
+    ex = BacktestExecutor()
+    try:
+        j1 = ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
+        ex.wait_all(timeout=30)
+        job = ex.get_job(j1)
+        assert job is not None
+        assert job["result"]["success"] is True
+        assert ex.get_job(999999) is None
+    finally:
+        ex.shutdown()
