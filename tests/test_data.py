@@ -272,3 +272,37 @@ def test_get_bars_daily_failover_cache_old_format(monkeypatch, tmp_path):
     df2 = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
     assert calls["n"] == 2
     assert "factor" not in df2.columns
+
+
+def test_resolve_index_alias_and_code():
+    from data.indices import resolve_index
+    assert resolve_index("沪深300") == "000300"
+    assert resolve_index("000300") == "000300"
+    assert resolve_index("不存在的指数") is None
+
+
+def test_index_constituents_parses_and_caches(monkeypatch, tmp_path):
+    import data.indices as idx_mod
+    monkeypatch.setattr(idx_mod, "INDEX_DIR", str(tmp_path))
+    import pandas as pd
+    df = pd.DataFrame({
+        "日期": ["2026-08-13", "2026-08-13"], "指数代码": ["000300", "000300"],
+        "指数名称": ["沪深300", "沪深300"],
+        "成分券代码": ["600519", "000001"], "成分券名称": ["贵州茅台", "平安银行"],
+        "权重": [5.0, 3.2],
+    })
+    calls = {"n": 0}
+
+    def fake_cons(symbol):
+        calls["n"] += 1
+        assert symbol == "000300"
+        return df
+
+    monkeypatch.setattr("akshare.index_stock_cons_weight_csindex", fake_cons)
+    out = idx_mod.index_constituents("000300")
+    assert [c["code"] for c in out] == ["600519", "000001"]
+    assert out[0]["name"] == "贵州茅台"
+    assert out[0]["weight"] == 5.0
+    # 二次调用命中缓存，不重复抓取
+    idx_mod.index_constituents("000300")
+    assert calls["n"] == 1
