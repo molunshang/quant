@@ -405,3 +405,37 @@ def test_chat_endpoint_still_returns_session(tmp_path, monkeypatch):
     r = client.post("/api/chat", json={"message": "hi"})
     assert r.status_code == 400
     assert "provider" in r.json()["detail"]
+
+
+from api.agent.gate import derive_validation_periods
+
+
+def test_derive_validation_periods_two_years():
+    vp = derive_validation_periods({"start": "2020-01-01", "end": "2024-12-31"}, today="2026-08-13")
+    assert vp == [
+        {"start": "2025-01-01", "end": "2025-12-31"},
+        {"start": "2026-01-01", "end": "2026-08-13"},
+    ]
+
+
+def test_derive_validation_periods_training_at_today_empty():
+    assert derive_validation_periods({"start": "2020-01-01", "end": "2026-12-31"}, today="2026-08-13") == []
+
+
+def test_derive_validation_periods_missing_period_empty():
+    assert derive_validation_periods(None, today="2026-08-13") == []
+
+
+def test_confirmation_summary_has_validation_periods():
+    ex = GoalExtraction(universe=["沪深300"], constraints={"annual_return": 0.10},
+                        validation_periods=[{"start": "2025-01-01", "end": "2025-12-31"}])
+    s = build_confirmation_summary(ex)
+    assert s["validation_periods"] == [{"start": "2025-01-01", "end": "2025-12-31"}]
+
+
+def test_format_confirmation_text_mentions_validation():
+    ex = GoalExtraction(universe=["沪深300"], constraints={"annual_return": 0.10},
+                        validation_periods=[{"start": "2025-01-01", "end": "2025-12-31"}])
+    text = format_confirmation_text(build_confirmation_summary(ex))
+    assert "验证段" in text
+    assert "2025-01-01" in text

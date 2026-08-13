@@ -12,7 +12,8 @@ from .agent import EventBus, LLMAgent
 from .executor import BacktestExecutor
 from .config import ConfigError, ProviderConfigStore
 from .gate import (
-    format_confirmation_text, format_goal_text, gate_extract, gate_step, is_confirmed,
+    derive_validation_periods, format_confirmation_text, format_goal_text,
+    gate_extract, gate_step, is_confirmed,
 )
 from .store import AgentSessionStore, ChatStore, StrategyStore
 
@@ -64,6 +65,8 @@ def handle_chat(session_id, message, goal, provider, bus, session_store, chat_st
 
 def _extract_and_advance(session_id, message, history, goal, provider, bus, session_store) -> dict:
     extraction = gate_extract(message, history, provider, goal=goal)
+    if extraction.period:
+        extraction.validation_periods = derive_validation_periods(extraction.period)
     step_name, payload = gate_step(extraction)
     if step_name == "clarify":
         session_store.set(session_id, "pending_clarify",

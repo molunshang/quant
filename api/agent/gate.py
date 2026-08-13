@@ -14,6 +14,36 @@ from datetime import date
 DEFAULT_PERIOD = {"start": "2020-01-01", "end": "2024-12-31"}
 DEFAULT_BENCHMARK = "沪深300 绝对收益"
 
+
+def derive_validation_periods(period: dict | None, today: str | None = None) -> list[dict]:
+    """Derive validation periods after the training period (one per year, max 2).
+
+    A validation period is a full calendar year after the training end; the
+    last one is truncated to `today`. Returns [] when the training period ends
+    at or after today (no unseen data yet) or when `period` is missing.
+    """
+    if not period:
+        return []
+    try:
+        end_d = date.fromisoformat(period.get("end", ""))
+    except (TypeError, ValueError):
+        return []
+    today_d = date.fromisoformat(today or date.today().isoformat())
+    out: list[dict] = []
+    year = end_d.year + 1
+    while len(out) < 2 and year <= today_d.year:
+        ys = date(year, 1, 1)
+        ye = date(year, 12, 31)
+        if ys > today_d:
+            break
+        if ye > today_d:
+            ye = today_d
+        if ys <= ye:
+            out.append({"start": ys.isoformat(), "end": ye.isoformat()})
+        year += 1
+    return out
+
+
 _CONFIRM_WORDS = ("确认", "没问题", "可以", "开始", "好", "ok", "对", "是的", "就这样", "同意", "行")
 _SUFFIXES = ("吧", "的", "了", "呢", "啊", "呀", "嘛")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -25,6 +55,7 @@ class GoalExtraction:
     constraints: dict[str, float] | None = None
     period: dict[str, str] | None = None
     benchmark: str | None = None
+    validation_periods: list[dict] | None = None
     followup_question: str | None = None
 
     def to_dict(self) -> dict:
@@ -64,6 +95,7 @@ def build_confirmation_summary(extraction: GoalExtraction) -> dict:
         "constraints": extraction.constraints or {},
         "period": period,
         "benchmark": benchmark,
+        "validation_periods": extraction.validation_periods or [],
         "defaults_noted": {
             "period": extraction.period is None,
             "benchmark": extraction.benchmark is None,
@@ -90,6 +122,12 @@ def format_confirmation_text(summary: dict) -> str:
     lines.append(f"• 回测区间：{p['start']} 至 {p['end']}{d_p}")
     d_b = "（默认，可修改）" if summary["defaults_noted"]["benchmark"] else ""
     lines.append(f"• 基准：{summary['benchmark']}{d_b}")
+    vp = summary.get("validation_periods") or []
+    if vp:
+        segs = "、".join(f"{v['start']}~{v['end']}" for v in vp)
+        lines.append(f"• 验证段（期末考，Agent 不可见，发布时自动验收）：{segs}")
+    else:
+        lines.append("• 验证段：无（目标区间已到当前，无未见过的数据；建议选更早的目标区间以启用防过拟合期末考）")
     lines.append("回复「确认」开始执行，或告诉我需要修改的地方。")
     return "\n".join(lines)
 
