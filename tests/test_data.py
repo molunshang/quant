@@ -306,3 +306,37 @@ def test_index_constituents_parses_and_caches(monkeypatch, tmp_path):
     # 二次调用命中缓存，不重复抓取
     idx_mod.index_constituents("000300")
     assert calls["n"] == 1
+
+
+def test_list_industries_parses_and_caches(monkeypatch, tmp_path):
+    import data.industry as ind_mod
+    monkeypatch.setattr(ind_mod, "INDUSTRY_DIR", str(tmp_path))
+    import pandas as pd
+    df = pd.DataFrame({"行业代码": ["801080.SI", "801150.SI"],
+                       "行业名称": ["电子", "食品饮料"], "成份个数": [495, 120]})
+    calls = {"n": 0}
+
+    def fake_info():
+        calls["n"] += 1
+        return df
+
+    monkeypatch.setattr("akshare.sw_index_first_info", fake_info)
+    out = ind_mod.list_industries()
+    assert out[0]["name"] == "电子"
+    assert out[0]["n_stocks"] == 495
+    ind_mod.list_industries()
+    assert calls["n"] == 1
+
+
+def test_industry_constituents_best_effort(monkeypatch):
+    import data.industry as ind_mod
+    import pandas as pd
+    df = pd.DataFrame({"股票代码": ["600519"], "股票简称": ["贵州茅台"]})
+    monkeypatch.setattr("akshare.sw_index_third_cons", lambda symbol: df)
+    assert ind_mod.industry_constituents("801150") == [{"code": "600519", "name": "贵州茅台"}]
+
+    def boom(symbol):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("akshare.sw_index_third_cons", boom)
+    assert ind_mod.industry_constituents("801150") == []
