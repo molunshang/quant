@@ -259,11 +259,23 @@ class DataLayer:
         silently re-downloaded. `force=True` skips the cache entirely.
         """
         cache_path = self._cache_path(symbol, freq, adjust)
+        cached_full = None
         if self.cache and not force and os.path.exists(cache_path):
             df = pd.read_csv(cache_path)
             if not df.empty and self._is_new_format(df):
                 df["date"] = df["date"].astype(str)
-                return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
+                df = df.sort_values("date").drop_duplicates("date")
+                in_range = df[(df["date"] >= start) & (df["date"] <= end)]
+                c_max = df["date"].max()
+                # Cache covers the request when it has data through (or past)
+                # the request's end date. Left boundary (start) is tolerated —
+                # a non-trading-day start falls before the cache's first bar
+                # without meaning the cache is incomplete.
+                if not in_range.empty and end <= c_max:
+                    return in_range.reset_index(drop=True)
+                # partial/absent coverage: keep the cached rows and merge with
+                # the freshly fetched range below (avoids wiping the cache)
+                cached_full = df
 
         errors = []
         if freq == "daily":
@@ -275,6 +287,12 @@ class DataLayer:
                 if df is not None and not df.empty:
                     df = df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
                     if self.cache and not df.empty:
+                        if cached_full is not None:
+                            # merge with the cached partial range so a narrow
+                            # request never wipes a wider cached history
+                            df = pd.concat(
+                                [cached_full, df], ignore_index=True
+                            ).sort_values("date").drop_duplicates("date").reset_index(drop=True)
                         df.to_csv(cache_path, index=False)
                     return df
             except Exception as e:  # noqa: BLE001 - failover is the intent
@@ -293,9 +311,13 @@ class DataLayer:
                     # apply start/end filter on fresh data too (sources may return full history)
                     df = df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
                     if self.cache and not df.empty:
-                        if freq != "daily" and "factor" not in df.columns:
+                        # Fallback prices are the final (adjusted) close — the
+                        # engine treats a factor=1 column as "no extra corporate
+                        # action", so annotating keeps the cache new-format and
+                        # reusable instead of being re-downloaded every call.
+                        if "factor" not in df.columns:
                             df = df.copy()
-                            df["factor"] = 1.0  # new-format marker (minute bars have no factor)
+                            df["factor"] = 1.0
                         df.to_csv(cache_path, index=False)
                     return df
             except Exception as e:  # noqa: BLE001 - failover is the intent

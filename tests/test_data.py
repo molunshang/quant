@@ -145,16 +145,60 @@ def test_get_bars_old_format_redownloads(monkeypatch, tmp_path):
     assert len(df) == 2
 
 
+def test_get_bars_extends_cache_when_request_out_of_range(monkeypatch, tmp_path):
+    """A cache covering part of the requested range must download the missing
+    piece and merge — not return empty, not overwrite the whole file with only
+    the missing slice. Regression for validation-period backtests wiping the
+    training-period cache."""
+    import akshare as ak
+    from data.sources import DataLayer, SymbolInfo
+
+    # Pre-seed a NEW-format cache (has factor) covering only 2023.
+    cache_path = tmp_path / "stock_600519_daily_qfq.csv"
+    cache_path.write_text(
+        "date,open,high,low,close,volume,factor\n"
+        "2023-01-02,10,11,9,10.5,1000,1.0\n"
+        "2023-01-03,10,11,9,10.5,1000,1.0\n"
+    )
+
+    # Fake factor-fetch returns 2024 bars (the missing range).
+    def fake_hist(symbol, period, start_date, end_date, adjust):
+        assert symbol == "600519"
+        return pd.DataFrame({
+            "date": ["2024-01-02", "2024-01-03"],
+            "open": [12.0, 13.0], "high": [13.0, 14.0], "low": [11.0, 12.0],
+            "close": [12.5, 13.5], "volume": [2000, 3000],
+        })
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+    dl = DataLayer(cache=True)
+    dl.cache_dir = str(tmp_path)
+    info = SymbolInfo("600519", "茅台", "stock", "sh")
+
+    # Request 2023-2024; cache has only 2023 -> must fetch 2024 and merge.
+    df = dl.get_bars(info, "daily", "2023-01-01", "2024-12-31", "qfq")
+    assert len(df) == 4, f"expected 4 merged rows, got {len(df)}"
+    assert df["date"].iloc[0] == "2023-01-02"
+    assert df["date"].iloc[-1] == "2024-01-03"
+    # cache file now holds both years, not just the fetched slice
+    cached = pd.read_csv(cache_path)
+    assert set(cached["date"]) == {"2023-01-02", "2023-01-03", "2024-01-02", "2024-01-03"}
+
+
 def test_get_bars_minute_cache_has_factor(monkeypatch, tmp_path):
     """Minute bars are fetched as before, but the cached CSV gets a factor=1
     column so the new-format detection keeps the minute cache hit path working."""
     from data.sources import DataLayer, SymbolInfo
 
     def fake_minute(symbol, period, start_date, end_date, adjust="qfq"):
+        # cover the full requested range so the cache, once written, fully
+        # satisfies a repeat request (range-aware cache hit)
+        dates = pd.date_range("2024-01-02", "2024-01-31", freq="B").strftime("%Y-%m-%d")
         return pd.DataFrame({
-            "date": ["2024-01-02", "2024-01-03"],
-            "open": [10.0, 11.0], "high": [11.0, 12.0], "low": [9.0, 10.0],
-            "close": [10.5, 11.5], "volume": [1000, 2000],
+            "date": list(dates),
+            "open": [10.0] * len(dates), "high": [11.0] * len(dates),
+            "low": [9.0] * len(dates), "close": [10.5] * len(dates),
+            "volume": [1000] * len(dates),
         })
 
     class FakeMinuteSource:
@@ -237,10 +281,11 @@ def test_v8_sources_serialize_concurrent_calls(monkeypatch):
     )
 
 
-def test_get_bars_daily_failover_cache_old_format(monkeypatch, tmp_path):
-    """A daily failover write must NOT annotate factor=1: the cache stays old
-    format (no factor column) so a later get_bars re-downloads through the
-    factor path instead of serving qfq-adjusted prices as if they were raw."""
+def test_get_bars_daily_failover_cache_new_format(monkeypatch, tmp_path):
+    """A daily failover write IS annotated with factor=1 so the cache becomes
+    new-format and reusable. The fallback prices are the final adjusted close,
+    so a factor=1 marker (no extra corporate action) is semantically correct —
+    this fixes the cache never being hit (re-download on every call)."""
     import akshare as ak
     from data.sources import DataLayer, SymbolInfo
 
@@ -257,10 +302,14 @@ def test_get_bars_daily_failover_cache_old_format(monkeypatch, tmp_path):
             return True
         def fetch_daily(self, symbol, start, end, adjust="qfq"):
             calls["n"] += 1
+            # cover the full requested range so the cache fully satisfies a
+            # repeat request under range-aware cache hits
+            dates = pd.date_range("2024-01-02", "2024-01-31", freq="B").strftime("%Y-%m-%d")
             return pd.DataFrame({
-                "date": ["2024-01-02", "2024-01-03"],
-                "open": [10.0, 11.0], "high": [11.0, 12.0], "low": [9.0, 10.0],
-                "close": [10.5, 11.5], "volume": [1000, 2000],
+                "date": list(dates),
+                "open": [10.0] * len(dates), "high": [11.0] * len(dates),
+                "low": [9.0] * len(dates), "close": [10.5] * len(dates),
+                "volume": [1000] * len(dates),
             })
 
     dl = DataLayer(cache=True)
@@ -270,17 +319,17 @@ def test_get_bars_daily_failover_cache_old_format(monkeypatch, tmp_path):
 
     df = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
     assert calls["n"] == 1
-    assert "factor" not in df.columns
+    assert "factor" in df.columns
 
-    # cached CSV must stay old format (no factor), so the next call re-downloads
+    # cached CSV is now new-format (factor column), so the next call HITS it
     cache_path = dl._cache_path(info, "daily", "qfq")
     cached = pd.read_csv(cache_path)
-    assert "factor" not in cached.columns
+    assert "factor" in cached.columns
 
-    # second call re-downloads rather than serving the stale qfq cache
+    # second call serves from cache — no re-download
     df2 = dl.get_bars(info, "daily", "2024-01-01", "2024-01-31", "qfq")
-    assert calls["n"] == 2
-    assert "factor" not in df2.columns
+    assert calls["n"] == 1
+    assert "factor" in df2.columns
 
 
 def test_resolve_index_alias_and_code():
