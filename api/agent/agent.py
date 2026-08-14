@@ -226,7 +226,11 @@ class LLMAgent:
                 state_text = f"回测结果汇总：\n{backtest_summary}\n当前状态：{json.dumps(snapshot, ensure_ascii=False)}"
                 if bus:
                     bus.publish(session_id, {"type": "backtest_results", "results": results})
-            messages.append({"role": "assistant", "tool_calls": [{"id": tc.id, "name": tc.name, "input": tc.input} for tc in resp.tool_uses]})
+            messages.append({
+                "role": "assistant",
+                "tool_calls": [{"id": tc.id, "name": tc.name, "input": tc.input} for tc in resp.tool_uses],
+                "assistant_blocks": resp.assistant_blocks,
+            })
             messages.append({"role": "user", "tool_results": [{"tool_use_id": tr["tool_use_id"], "content": tr["content"], "is_error": tr["is_error"]} for tr in tool_results]})
             if state_text is not None:
                 messages.append({"role": "user", "content": state_text})

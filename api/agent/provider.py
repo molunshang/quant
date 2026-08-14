@@ -21,6 +21,7 @@ class ToolCall:
 class LLMResponse:
     text: str | None = None
     tool_uses: list[ToolCall] = field(default_factory=list)
+    assistant_blocks: list[dict] | None = None
 
 
 class LLMProvider(ABC):
@@ -55,13 +56,18 @@ def _anthropic_messages(messages: list[dict]) -> list[dict]:
     Neutral shapes translated here:
       - {"role": "assistant", "tool_calls": [{"id", "name", "input"}]}
           -> {"role": "assistant", "content": [{"type": "tool_use", "id", "name", "input"}]}
+      - {"role": "assistant", "assistant_blocks": [{"type": "thinking", ...}, ...]}
+          -> assistant content = assistant_blocks verbatim (preserves thinking
+             blocks that reasoning models require to be passed back)
       - {"role": "user", "tool_results": [{"tool_use_id", "content", "is_error"}]}
           -> {"role": "user", "content": [{"type": "tool_result", "tool_use_id", "content", "is_error"}]}
     Plain-text messages pass through unchanged.
     """
     out = []
     for m in messages:
-        if m.get("role") == "assistant" and m.get("tool_calls"):
+        if m.get("role") == "assistant" and m.get("assistant_blocks"):
+            out.append({"role": "assistant", "content": list(m["assistant_blocks"])})
+        elif m.get("role") == "assistant" and m.get("tool_calls"):
             out.append({
                 "role": "assistant",
                 "content": [
@@ -111,7 +117,17 @@ class AnthropicProvider(LLMProvider):
             for b in resp.content
             if b.type == "tool_use"
         ]
-        return LLMResponse(text=text, tool_uses=tool_uses)
+        # Keep the full assistant content blocks (incl. thinking) so the agent
+        # loop can pass them back verbatim — reasoning models require it.
+        # Real anthropic blocks expose model_dump(); dict-style blocks (tests)
+        # carry the fields directly.
+        blocks = []
+        for b in resp.content:
+            dump = getattr(b, "model_dump", None)
+            blocks.append(dump() if callable(dump) else dict(vars(b)))
+        if resp.content and not blocks:
+            blocks = None
+        return LLMResponse(text=text, tool_uses=tool_uses, assistant_blocks=blocks)
 
 
 def _openai_tools(tools: list[dict]) -> list[dict]:
