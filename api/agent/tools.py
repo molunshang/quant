@@ -104,8 +104,11 @@ def query_sector_perf(input_: dict, ctx: AgentToolContext) -> str:
 
     df = ak.stock_zh_index_daily(symbol=f"{prefix}{index_code}")
     tp = getattr(ctx, "training_period", None)
-    if tp and tp.get("end"):
-        df = df[df["date"] <= tp["end"]]
+    if tp and tp.get("end") and not df.empty:
+        # akshare may return date as datetime.date; normalize to string for
+        # the training-end cutoff comparison
+        end_s = str(tp["end"])
+        df = df[df["date"].astype(str) <= end_s]
     df = df.tail(days)
     if df.empty:
         return _json({"code": code, "days": days, "return_pct": None})
@@ -281,7 +284,7 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Strategy name (draft identifier). Registering an existing name updates that draft."},
-                "source": {"type": "string", "description": "Python source defining `def handle_data(ctx)` (called once per time step = per trading day), plus optional `def initialize(ctx)` for cross-bar constants in ctx.state. ctx provides: ctx.universe (candidate symbols), ctx.state (cross-bar dict), ctx.history(symbol, lookback) for a symbol's history up to the current bar, ctx.price(symbol), ctx.positions (dict symbol->shares), ctx.cash, ctx.total_value. Trade via ctx.buy(symbol, pct) / ctx.sell(symbol, pct) (pct relative to net value 0~1, both return bool; sell default clears the position). Engine enforces A-share rules (T+1, price limit, 100-share lots). Indicator helpers sma/ema/rsi/macd are pre-injected (call directly, no import); math/numpy/pandas may be imported as math/np/pandas."},
+                "source": {"type": "string", "description": "Python source defining `def handle_data(ctx)` (called once per time step = per trading day), plus optional `def initialize(ctx)` for cross-bar constants in ctx.state. ctx provides: ctx.universe (candidate symbols), ctx.state (cross-bar dict), ctx.history(symbol, lookback) for a symbol's history up to the current bar, ctx.price(symbol), ctx.positions (dict symbol->shares), ctx.cash, ctx.total_value. IMPORTANT API CONTRACTS: ctx.history(symbol, lookback) returns a pandas DataFrame with columns ['date','open','high','low','close','volume'] — access the close column as bars['close'] (a pandas Series), NEVER pass the whole DataFrame to np.array()/indicators. ctx.price(symbol) returns a single float. ctx.buy(symbol, pct) buys pct of net value (0<pct<=1); ctx.sell(symbol, pct) sells pct of the POSITION (0<pct<=1), pass pct=1 or omit it to clear the position — passing pct=0 sells nothing. Both return bool (True if filled). Indicator helpers sma/ema/rsi/macd take a 1D price Series/array (e.g. bars['close']) — never a DataFrame; math/numpy/pandas may be imported as math/np/pandas."},
                 "description": {"type": "string", "description": "Optional human-readable summary of the strategy's logic."},
             },
             "required": ["name", "source"],

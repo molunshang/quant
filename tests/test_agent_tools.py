@@ -226,6 +226,25 @@ def test_query_sector_perf_capped_at_training_end(monkeypatch, tmp_path):
     assert out["return_pct"] == pytest.approx(0.10)
 
 
+def test_query_sector_perf_capped_with_datetime_dates(monkeypatch, tmp_path):
+    """akshare may return date as datetime.date — the training-end cutoff must
+    normalize to str before comparing (regression: '<=' str vs date TypeError)."""
+    from datetime import date
+    import akshare as ak
+    import pandas as pd
+    df = pd.DataFrame({
+        "date": [date(2024, 11, 1), date(2024, 12, 31), date(2025, 1, 2), date(2025, 6, 1)],
+        "open": [1.0] * 4, "high": [1.1] * 4, "low": [0.9] * 4,
+        "close": [100.0, 110.0, 121.0, 133.1], "volume": [1] * 4,
+    })
+    monkeypatch.setattr(ak, "stock_zh_index_daily", lambda symbol: df)
+    c = _ctx(tmp_path)
+    c.training_period = {"start": "2020-01-01", "end": "2024-12-31"}
+    out = json.loads(query_sector_perf({"code": "000300", "days": 60}, c))
+    assert out["end"] == "2024-12-31"
+    assert out["return_pct"] == pytest.approx(0.10)
+
+
 def test_diagnose_backtest_tool(tmp_path):
     class Ex:
         def __init__(self):

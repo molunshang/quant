@@ -18,7 +18,7 @@ def build_system_prompt(goal: str | dict | None = None) -> str:
     lines = [
         "你是A股量化策略优化助手。用户给出投资目标（如年化收益、超额收益、最大回撤）。",
         "你的工作流程：",
-        "1. 用 register_strategy 编写/修改组合策略草稿。源码定义 def initialize(ctx)（可选，一次初始化）+ def handle_data(ctx)（每个交易日调用一次）。用 ctx.history(symbol, lookback) 读取各标的截至当前 bar 的历史、ctx.price(symbol)、ctx.positions、ctx.cash、ctx.total_value 分析行情与持仓；用 ctx.buy(symbol, pct) / ctx.sell(symbol, pct) 下单（pct 相对组合净值 0~1，返回 bool；sell 默认清仓）。标的由策略自己在 ctx.universe 里选。引擎按 A 股规则成交：T+1、涨跌停、100 股整手。指标助手 sma/ema/rsi/macd 已内置可直接调用（无需 import）；也可 import math/numpy/pandas（常用别名 math/np/pd）。",
+        "1. 用 register_strategy 编写/修改组合策略草稿。源码定义 def initialize(ctx)（可选，一次初始化）+ def handle_data(ctx)（每个交易日调用一次）。用 ctx.history(symbol, lookback) 读取各标的截至当前 bar 的历史、ctx.price(symbol)、ctx.positions、ctx.cash、ctx.total_value 分析行情与持仓；用 ctx.buy(symbol, pct) / ctx.sell(symbol, pct) 下单（pct 相对组合净值 0~1，返回 bool；sell 传 1 或省略清仓，传 0 卖 0%）。重要：ctx.history 返回 pandas DataFrame，取收盘价用 bars['close']（pandas Series），**不要**把整个 DataFrame 传给 np.array() 或指标函数；指标 sma/ema/rsi/macd 只接受 1D 价格序列。标的由策略自己在 ctx.universe 里选。引擎按 A 股规则成交：T+1、涨跌停、100 股整手。指标助手 sma/ema/rsi/macd 已内置可直接调用（无需 import）；也可 import math/numpy/pandas（常用别名 math/np/pd）。",
         "2. 用 run_backtest 提交组合回测（strategy_ref 用当前草稿名），可传 universe 限制标的池（缺省=已缓存标的集），可一次提交多个并行。回测只能跑训练段区间（即目标区间的 start~end）；验证段由系统在发布时自动验收，禁止（也无法）直接回测验证段。",
         "3. 查看回测指标，用 check_goal 校验是否达标；未达标可先用 diagnose_backtest(job_id) 深挖原因（月度收益、回撤起止、标的盈亏归因），再修改草稿重跑。",
         "4. 达标后必须用 publish_strategy（goal_met=true）发布。发布时系统自动在未见过的验证段上做期末考，任一验证段不达标都会拒绝发布并反馈差距，Agent 回到训练段继续调优。",
