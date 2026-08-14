@@ -39,15 +39,18 @@ def test_submit_and_wait_all(monkeypatch):
     monkeypatch.setattr(mod, "run_backtest", _dummy_backtest)
     ex = BacktestExecutor()
     try:
-        j1 = ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
-        j2 = ex.submit("momentum_rotation", universe={"symbols": ["600519"]})
+        # use a symbol with NO local cache file (e.g. 999999) so the fake
+        # DataLayer is used instead of the real cache (which may or may not
+        # hold 600519 depending on precache activity)
+        j1 = ex.submit("buy_and_hold", universe={"symbols": ["999999"]})
+        j2 = ex.submit("momentum_rotation", universe={"symbols": ["999999"]})
         results = ex.wait_all(timeout=30)
         assert len(results) == 2
         assert results[0]["status"] == "done"
         assert results[0]["result"]["success"] is True
         assert "total_return" in results[0]["result"]["metrics"]
         ex.reset_batch()
-        j3 = ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
+        j3 = ex.submit("buy_and_hold", universe={"symbols": ["999999"]})
         r3 = ex.wait_all(timeout=30)
         assert len(r3) == 1
         assert r3[0]["result"]["success"] is True
@@ -113,7 +116,7 @@ def test_get_job_returns_completed_result(monkeypatch):
     monkeypatch.setattr(mod, "run_backtest", _dummy_backtest)
     ex = BacktestExecutor()
     try:
-        j1 = ex.submit("buy_and_hold", universe={"symbols": ["600519"]})
+        j1 = ex.submit("buy_and_hold", universe={"symbols": ["999999"]})
         ex.wait_all(timeout=30)
         job = ex.get_job(j1)
         assert job is not None
