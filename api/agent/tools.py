@@ -144,9 +144,16 @@ def publish_strategy(input_: dict, ctx: AgentToolContext) -> str:
         runner=runner, universe=universe,
     )
     if failures:
+        by_period = {json.dumps(f["period"], sort_keys=True): f for f in failures}
+        period_order = list(by_period)
+        label = {p: f"第{i + 1}段验证段" for i, p in enumerate(period_order)}
+        redacted = [
+            {**f, "period": label[json.dumps(f["period"], sort_keys=True)]}
+            for f in failures
+        ]
         raise ValueError(
             "验证段不达标，拒绝发布（防过拟合）："
-            + json.dumps(failures, ensure_ascii=False)
+            + json.dumps(redacted, ensure_ascii=False)
             + " 请回到训练段继续调优后再试")
     rec = ctx.store.publish_version(
         name, int(version),

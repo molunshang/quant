@@ -236,6 +236,7 @@ def test_publish_validation_gate_rejects(tmp_path):
     with pytest.raises(Exception) as e:
         publish_strategy({"name": "ma", "goal_met": True}, c)
     assert "验证段" in str(e.value)
+    assert "2025-01-01" not in str(e.value)
 
 
 def test_publish_validation_gate_passes(tmp_path):
