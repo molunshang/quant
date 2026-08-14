@@ -57,7 +57,10 @@ def _symbol_attribution(trades: list[dict]) -> list[dict]:
                                      "held_days": 0.0, "sold_shares": 0})
         d["n_trades"] += 1
         if t.get("side") == "buy":
-            d["buys"].append({"shares": int(t["shares"]), "price": float(t["price"])})
+            buy_fee = (float(t.get("commission", 0)) + float(t.get("stamp_duty", 0))
+                       + float(t.get("transfer_fee", 0)))
+            d["buys"].append({"shares": int(t["shares"]), "price": float(t["price"]),
+                              "fee": buy_fee})
             if d["buy_date"] is None or str(t.get("date", "")) < d["buy_date"]:
                 d["buy_date"] = str(t.get("date", ""))
         else:
@@ -67,10 +70,12 @@ def _symbol_attribution(trades: list[dict]) -> list[dict]:
             while remaining > 0 and d["buys"]:
                 b = d["buys"][0]
                 take = min(remaining, b["shares"])
-                cost += take * b["price"]
+                ratio = take / b["shares"] if b["shares"] else 0
+                cost += take * b["price"] + b["fee"] * ratio
                 sold += take
                 remaining -= take
                 b["shares"] -= take
+                b["fee"] -= b["fee"] * ratio
                 if b["shares"] == 0:
                     d["buys"].pop(0)
             fees = (float(t.get("commission", 0)) + float(t.get("stamp_duty", 0))

@@ -40,7 +40,7 @@ def test_diagnose_drawdown_and_attribution():
     assert d["drawdown_analysis"]["peak_date"] < d["drawdown_analysis"]["trough_date"]
     sym = next(s for s in d["symbol_attribution"] if s["symbol"] == "600519")
     assert sym["n_trades"] == 2
-    assert sym["pnl"] == pytest.approx(12000 - 10000 - 5 - 6 - 0.1, abs=0.01)
+    assert sym["pnl"] == pytest.approx(12000 - 5 - 6 - 0.1 - (10000 + 5), abs=0.01)
     assert sym["held_days"] == 39  # (2025-02-10 - 2025-01-02).days
 
 
