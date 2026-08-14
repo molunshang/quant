@@ -190,6 +190,16 @@ class DataLayer:
         self.cache_dir = CACHE_DIR
         os.makedirs(self.cache_dir, exist_ok=True)
 
+    def symbol_info(self, code: str) -> SymbolInfo:
+        """Resolve a symbol code to its SymbolInfo via the registry.
+
+        Used by the engine's lazy bar loader (Context._ensure_loaded). Falls
+        back to a best-effort SymbolInfo if the code is unregistered.
+        """
+        from data.registry import get_registry
+
+        return get_registry().get(code)
+
     def _cache_path(self, symbol: SymbolInfo, freq: str, adjust: str) -> str:
         key = f"{symbol.type}_{symbol.code}_{freq}_{adjust}.csv"
         return os.path.join(self.cache_dir, key)

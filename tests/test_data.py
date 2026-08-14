@@ -54,6 +54,15 @@ def test_sources_present():
     assert any(isinstance(s, SinaSource) for s in dl.sources)
 
 
+def test_symbol_info_resolves_code():
+    """DataLayer.symbol_info must resolve a code to SymbolInfo via registry —
+    the engine's lazy loader (Context._ensure_loaded) depends on it."""
+    dl = DataLayer()
+    info = dl.symbol_info("600519")
+    assert info.code == "600519"
+    assert info.type in ("stock", "etf", "fund")
+
+
 def test_sina_source_forwards_adjust(monkeypatch):
     """SinaSource must forward hfq/qfq to akshare and not silently downgrade
     hfq to unadjusted data (the old 'qfq'/'1' alias stripped hfq -> None)."""
