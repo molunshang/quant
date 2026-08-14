@@ -521,3 +521,25 @@ def test_agent_run_sets_ctx_goal_and_training_period():
     agent.run("s1", "在沪深300做到年化10%", goal=goal)
     assert agent._ctx.goal == goal
     assert agent._ctx.training_period == {"start": "2020-01-01", "end": "2024-12-31"}
+
+
+def test_validation_dates_never_reach_llm_context():
+    from api.agent.agent import LLMAgent
+    from api.agent.provider import ToolCall
+
+    goal = {"constraints": {"annual_return": 0.10},
+            "period": {"start": "2020-01-01", "end": "2024-12-31"},
+            "validation_periods": [{"start": "2025-01-01", "end": "2025-12-31"}]}
+    # turn 1: run_backtest; turn 2: publish (no more tools)
+    provider = FakeProvider([
+        LLMResponse(text="先回测", tool_uses=[ToolCall(id="c1", name="run_backtest",
+                                                      input={"strategy_ref": "ma"})]),
+        LLMResponse(text="完成", tool_uses=[]),
+    ])
+    agent = LLMAgent(provider=provider, store=FakeStore(), executor=FakeExecutor())
+    agent.run("s1", "在沪深300做到年化10%", goal=goal)
+    for call in provider.calls:
+        for m in call["messages"]:
+            content = json.dumps(m, ensure_ascii=False)
+            assert "2025-01-01" not in content, content
+            assert "2025-12-31" not in content, content

@@ -89,7 +89,11 @@ def list_industries(input_: dict, ctx: AgentToolContext) -> str:
 
 
 def query_sector_perf(input_: dict, ctx: AgentToolContext) -> str:
-    """近 N 日涨跌幅 for an index or SW industry. Best-effort."""
+    """近 N 日涨跌幅 for an index or SW industry. Best-effort.
+
+    Window is capped at the training-period end when one is set, so the
+    agent never sees market direction during the hidden validation periods.
+    """
     code = input_.get("code")
     days = int(input_.get("days", 60))
     if not code:
@@ -99,6 +103,9 @@ def query_sector_perf(input_: dict, ctx: AgentToolContext) -> str:
     import akshare as ak
 
     df = ak.stock_zh_index_daily(symbol=f"{prefix}{index_code}")
+    tp = getattr(ctx, "training_period", None)
+    if tp and tp.get("end"):
+        df = df[df["date"] <= tp["end"]]
     df = df.tail(days)
     if df.empty:
         return _json({"code": code, "days": days, "return_pct": None})

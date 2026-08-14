@@ -53,25 +53,24 @@ def _symbol_attribution(trades: list[dict]) -> list[dict]:
     for t in trades:
         sym = t.get("symbol", "?")
         d = per_sym.setdefault(sym, {"buys": [], "pnl": 0.0, "n_trades": 0,
-                                     "max_single_loss": 0.0, "held_days": set()})
+                                     "max_single_loss": 0.0, "buy_date": None,
+                                     "held_days": 0.0, "sold_shares": 0})
         d["n_trades"] += 1
         if t.get("side") == "buy":
-            buy_fee = (float(t.get("commission", 0)) + float(t.get("stamp_duty", 0))
-                       + float(t.get("transfer_fee", 0)))
-            d["buys"].append({"shares": int(t["shares"]), "price": float(t["price"]),
-                              "fee": buy_fee})
-            d["held_days"].add(str(t.get("date", "")))
+            d["buys"].append({"shares": int(t["shares"]), "price": float(t["price"])})
+            if d["buy_date"] is None or str(t.get("date", "")) < d["buy_date"]:
+                d["buy_date"] = str(t.get("date", ""))
         else:
             remaining = int(t["shares"])
             cost = 0.0
+            sold = 0
             while remaining > 0 and d["buys"]:
                 b = d["buys"][0]
                 take = min(remaining, b["shares"])
-                ratio = take / b["shares"]
-                cost += take * b["price"] + b["fee"] * ratio
+                cost += take * b["price"]
+                sold += take
                 remaining -= take
                 b["shares"] -= take
-                b["fee"] -= b["fee"] * ratio
                 if b["shares"] == 0:
                     d["buys"].pop(0)
             fees = (float(t.get("commission", 0)) + float(t.get("stamp_duty", 0))
@@ -80,12 +79,24 @@ def _symbol_attribution(trades: list[dict]) -> list[dict]:
             d["pnl"] += pnl
             if pnl < d["max_single_loss"]:
                 d["max_single_loss"] = pnl
-    return [
-        {"symbol": s, "pnl": round(v["pnl"], 2), "n_trades": v["n_trades"],
-         "max_single_loss": round(v["max_single_loss"], 2),
-         "held_days": len(v["held_days"])}
-        for s, v in sorted(per_sym.items())
-    ]
+            if d["buy_date"]:
+                from datetime import date as _date
+                try:
+                    buy = _date.fromisoformat(d["buy_date"])
+                    sell = _date.fromisoformat(str(t.get("date", "")))
+                    d["held_days"] += (sell - buy).days * (sold / int(t["shares"])) if int(t["shares"]) else 0
+                except ValueError:
+                    pass
+            d["sold_shares"] += sold
+    # close any remaining open position with the last trade date
+    out = []
+    for s, v in sorted(per_sym.items()):
+        out.append({
+            "symbol": s, "pnl": round(v["pnl"], 2), "n_trades": v["n_trades"],
+            "max_single_loss": round(v["max_single_loss"], 2),
+            "held_days": int(round(v["held_days"])),
+        })
+    return out
 
 
 def _holdings_history(eq: pd.DataFrame) -> list[dict]:

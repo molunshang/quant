@@ -308,6 +308,33 @@ def test_index_constituents_parses_and_caches(monkeypatch, tmp_path):
     assert calls["n"] == 1
 
 
+def test_index_constituents_nan_weight_sanitized(monkeypatch, tmp_path):
+    import json
+
+    import data.indices as idx_mod
+    import pandas as pd
+    monkeypatch.setattr(idx_mod, "INDEX_DIR", str(tmp_path))
+    df = pd.DataFrame({
+        "日期": ["2026-08-13", "2026-08-13"], "指数代码": ["000300", "000300"],
+        "指数名称": ["沪深300", "沪深300"],
+        "成分券代码": ["600519", "000001"], "成分券名称": ["贵州茅台", "平安银行"],
+        "权重": [float("nan"), 3.2],
+    })
+    calls = {"n": 0}
+
+    def fake_cons(symbol):
+        calls["n"] += 1
+        return df
+
+    monkeypatch.setattr("akshare.index_stock_cons_weight_csindex", fake_cons)
+    out = idx_mod.index_constituents("000300")
+    assert out[0]["weight"] == 0.0  # NaN 权重必须落为 0.0
+    assert out[1]["weight"] == 3.2
+    # 缓存 JSON 必须可 round-trip（裸 NaN token 会让 json.load 抛错）
+    cached = json.loads((tmp_path / "index_000300.json").read_text(encoding="utf-8"))
+    assert cached[0]["weight"] == 0.0
+
+
 def test_list_industries_parses_and_caches(monkeypatch, tmp_path):
     import data.industry as ind_mod
     monkeypatch.setattr(ind_mod, "INDUSTRY_DIR", str(tmp_path))

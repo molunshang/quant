@@ -6,6 +6,7 @@ agent expands an index to its constituent stock list via list_symbols(index=...)
 from __future__ import annotations
 
 import json
+import math
 import os
 
 INDEX_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "cache")
@@ -61,10 +62,16 @@ def index_constituents(code: str, force: bool = False) -> list[dict]:
     df = ak.index_stock_cons_weight_csindex(symbol=code)
     out = []
     for _, r in df.iterrows():
+        try:
+            w = float(r["权重"])
+        except (TypeError, ValueError):
+            w = 0.0
+        if not math.isfinite(w):
+            w = 0.0
         out.append({
             "code": str(r["成分券代码"]),
             "name": str(r["成分券名称"]),
-            "weight": float(r["权重"]) if r["权重"] else 0.0,
+            "weight": w,
         })
     try:
         os.makedirs(INDEX_DIR, exist_ok=True)

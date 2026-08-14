@@ -207,6 +207,25 @@ def test_query_sector_perf(monkeypatch, tmp_path):
     assert out["start"] == "2026-06-01"
 
 
+def test_query_sector_perf_capped_at_training_end(monkeypatch, tmp_path):
+    import akshare as ak
+    import pandas as pd
+    # rows after the training end (2025/2026) must never reach the agent
+    df = pd.DataFrame({
+        "date": ["2024-11-01", "2024-12-31", "2025-01-01", "2025-06-01", "2026-01-01"],
+        "open": [1.0] * 5, "high": [1.1] * 5, "low": [0.9] * 5,
+        "close": [100.0, 110.0, 121.0, 133.1, 146.41], "volume": [1] * 5,
+    })
+    monkeypatch.setattr(ak, "stock_zh_index_daily", lambda symbol: df)
+    c = _ctx(tmp_path)
+    c.training_period = {"start": "2020-01-01", "end": "2024-12-31"}
+    out = json.loads(query_sector_perf({"code": "000300", "days": 60}, c))
+    assert out["end"] <= "2024-12-31"
+    assert out["start"] == "2024-11-01"
+    # return computed only over rows up to training end: 110/100 - 1
+    assert out["return_pct"] == pytest.approx(0.10)
+
+
 def test_diagnose_backtest_tool(tmp_path):
     class Ex:
         def __init__(self):

@@ -44,6 +44,10 @@ def build_system_prompt(goal: str | dict | None = None) -> str:
 
 
 def _build_state_snapshot(ctx: AgentToolContext, goal: str | None) -> dict:
+    # never leak validation-period dates to the LLM — strip them from the
+    # goal snapshot (they are enforced internally by publish_strategy only)
+    if isinstance(goal, dict):
+        goal = {k: v for k, v in goal.items() if k != "validation_periods"}
     drafts = []
     for s in ctx.store.list_strategies():
         g = ctx.store.get_strategy(s["name"])
