@@ -1,0 +1,63 @@
+# 掘金量化 Python SDK 文档
+
+## 安装
+
+支持3.6.5以上，3.7.*，3.8.*，3.9.*，3.10.*，3.11.*，3.12.*和3.13.*的 Python 版本
+
+支持 Windows 和 Linux 系统的 Python
+
+支持 64 位和 32 位的 Python
+
+掘金 Python SDK 名为 gm， 已经打包上传到 PYPI 库
+
+```bash
+python3 -m pip install gm -U -i https://mirrors.aliyun.com/pypi/simple/
+```
+其他可选择源
+https://pypi.tuna.tsinghua.edu.cn/simple
+https://mirror.baidu.com/pypi/simple/
+https://mirrors.cloud.tencent.com/pypi/simple/
+https://pypi.mirrors.ustc.edu.cn/simple/
+
+
+## 根目录
+- [快速开始](sdk/快速开始.md)
+- [策略程序架构](sdk/策略程序架构.md)
+- [变量约定](sdk/变量约定.md)
+- [数据结构](sdk/数据结构.md)
+- [枚举常量](sdk/枚举常量.md)
+- [错误码](sdk/错误码.md)
+
+## API 介绍
+- [基本函数](sdk/API介绍/基本函数.md)
+- [交易函数](sdk/API介绍/交易函数.md)
+- [交易查询函数](sdk/API介绍/交易查询函数.md)
+- [两融交易函数](sdk/API介绍/两融交易函数.md)
+- [债券交易函数](sdk/API介绍/债券交易函数.md)
+- [基金交易函数](sdk/API介绍/基金交易函数.md)
+- [新股新债交易函数](sdk/API介绍/新股新债交易函数.md)
+- [算法交易函数](sdk/API介绍/算法交易函数.md)
+- [交易事件](sdk/API介绍/交易事件.md)
+- [数据事件](sdk/API介绍/数据事件.md)
+- [其他事件](sdk/API介绍/其他事件.md)
+- [数据订阅](sdk/API介绍/数据订阅.md)
+- [动态参数](sdk/API介绍/动态参数.md)
+- [标的池](sdk/API介绍/标的池.md)
+- [行情数据查询函数（免费）](sdk/API介绍/行情数据查询函数（免费）.md)
+- [股票财务数据及基础数据函数（免费）](sdk/API介绍/股票财务数据及基础数据函数（免费）.md)
+- [股票增值数据函数（付费）](sdk/API介绍/股票增值数据函数（付费）.md)
+- [期货基础数据函数（免费）](sdk/API介绍/期货基础数据函数（免费）.md)
+- [期货增值数据函数（付费）](sdk/API介绍/期货增值数据函数（付费）.md)
+- [基金增值数据函数（付费）](sdk/API介绍/基金增值数据函数（付费）.md)
+- [可转债增值数据函数（付费）](sdk/API介绍/可转债增值数据函数（付费）.md)
+- [通用数据函数（免费）](sdk/API介绍/通用数据函数（免费）.md)
+- [老版本数据函数](sdk/API介绍/老版本数据函数.md)
+- [其他函数](sdk/API介绍/其他函数.md)
+
+
+## 更新文档
+
+```bash
+pip install html2text
+python3 download_sdk_docs.py
+```
