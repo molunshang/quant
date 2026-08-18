@@ -2,6 +2,12 @@
 
 中国A股回测系统 — 支持自定义策略、Web 可视化、LLM Agent 自动迭代目标优化。
 
+> 本仓库为**双项目结构**：
+> - **quant-agent**（根目录）— 自研回测引擎 + LLM Agent 优化系统，本文档介绍。
+> - **jq/** — 基于[掘金量化](https://www.myquant.cn)平台的策略集合（`gm.api` SDK），跑掘金终端回测/实盘。见 [jq/README.md](jq/README.md)。
+>
+> 两个项目相互独立、互不依赖。掘金策略需要 `pip install -r jq/requirements.txt`（`gm` 包）才能运行。
+
 ## 特性
 
 - **自定义策略**：组合级策略 `initialize(ctx)`（可选）+ `handle_data(ctx)`，策略从 universe 自选标的、自定买卖，通过 API 提交源码或引用内置策略（AST 沙箱校验，拒绝 import / 私有访问）

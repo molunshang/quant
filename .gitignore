@@ -1,14 +1,17 @@
-# quant-agent
-
-```
+# quant-agent（自研回测 + LLM Agent）
 
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+venv/
+.env
 .pytest_cache/
 data/cache/
 data/agent.db
 data/agent.db.bak-*
 *.log
 .DS_Store
-```
+
+# 掘金策略（jq/）生成物
+jq/myquant_sdk_docs/
